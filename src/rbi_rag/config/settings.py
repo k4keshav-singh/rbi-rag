@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 RetrieverName = Literal["dense", "fts", "hybrid"]
+ChunkStrategyName = Literal["fixed_tokens", "section_aware"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -54,6 +55,12 @@ class Settings(BaseSettings):
     )
     download_max_retries: int = Field(default=5, ge=0)
     user_agent: str = "rbi-rag/0.1"
+    listing_url: str = "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx"
+
+    # --- Chunking (the ablation sweeps these; these are the defaults) ---
+    chunk_strategy: ChunkStrategyName = "section_aware"
+    chunk_size: int = Field(default=512, ge=1)
+    chunk_overlap_ratio: float = Field(default=0.15, ge=0.0, lt=1.0)
 
     # --- Paths ---
     data_dir: Path = Path("data")
@@ -81,6 +88,16 @@ class Settings(BaseSettings):
     def raw_dir(self) -> Path:
         """Where downloaded PDFs land, as an absolute path."""
         return self._absolute(self.data_dir) / "raw"
+
+    @property
+    def processed_dir(self) -> Path:
+        """Where parsed pages and chunk files are written."""
+        return self._absolute(self.data_dir) / "processed"
+
+    @property
+    def manifest_path(self) -> Path:
+        """The ingest manifest, one JSONL row per Master Direction."""
+        return self._absolute(self.data_dir) / "manifest.jsonl"
 
     @property
     def results_path(self) -> Path:

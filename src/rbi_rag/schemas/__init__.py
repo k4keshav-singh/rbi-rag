@@ -5,8 +5,11 @@ from rbi_rag.schemas.core import (
     ChunkStrategy,
     Citation,
     Document,
+    ManifestEntry,
+    PageText,
     QuestionType,
     RetrievedChunk,
+    Section,
 )
 
 __all__ = [
@@ -14,6 +17,9 @@ __all__ = [
     "ChunkStrategy",
     "Citation",
     "Document",
+    "ManifestEntry",
+    "PageText",
     "QuestionType",
     "RetrievedChunk",
+    "Section",
 ]

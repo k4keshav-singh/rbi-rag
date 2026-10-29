@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pymupdf>=1.24",
+    "tokenizers>=0.20",
     "uvicorn[standard]>=0.32",
 ]
 
@@ -138,6 +139,12 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# PyMuPDF ships no type information. Confine the resulting looseness to the
+# one module that touches it, rather than weakening mypy across src/.
+[[tool.mypy.overrides]]
+module = "rbi_rag.ingest.parse"
+disallow_untyped_calls = false
 
 [tool.pydantic-mypy]
 init_typed = true
