@@ -1,0 +1,156 @@
+[project]
+name = "rbi-rag"
+version = "0.1.0"
+description = "Question answering over RBI Master Directions with verifiable citations."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "anthropic>=0.39",
+    "fastapi>=0.115",
+    "pgvector>=0.3",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pymupdf>=1.24",
+    "uvicorn[standard]>=0.32",
+]
+
+# Heavy ML dependencies live here so Phase 0 CI does not install torch.
+# Install with: uv sync --extra ml
+[project.optional-dependencies]
+ml = [
+    "sentence-transformers>=3.3",
+    "torch>=2.5",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "mypy>=1.13",
+    "poethepoet>=0.30",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rbi_rag"]
+
+
+# --------------------------------------------------------------------------
+# Task runner (PowerShell-friendly: every task is a plain command, no shell)
+# --------------------------------------------------------------------------
+[tool.poe.tasks.lint]
+help = "Run ruff check, ruff format --check, and mypy"
+sequence = [
+    { cmd = "ruff check src tests" },
+    { cmd = "ruff format --check src tests" },
+    { cmd = "mypy src" },
+]
+
+[tool.poe.tasks.fmt]
+help = "Auto-fix lint findings and format the code"
+sequence = [
+    { cmd = "ruff check --fix src tests" },
+    { cmd = "ruff format src tests" },
+]
+
+[tool.poe.tasks.test]
+help = "Run the test suite"
+cmd = "pytest"
+
+[tool.poe.tasks.db-up]
+help = "Start Postgres + pgvector and wait until healthy"
+cmd = "docker compose up -d --wait"
+
+[tool.poe.tasks.db-down]
+help = "Stop Postgres (keeps the data volume)"
+cmd = "docker compose down"
+
+[tool.poe.tasks.db-nuke]
+help = "Stop Postgres and DELETE the data volume"
+cmd = "docker compose down -v"
+
+[tool.poe.tasks.db-logs]
+help = "Tail Postgres logs"
+cmd = "docker compose logs -f postgres"
+
+[tool.poe.tasks.ingest]
+help = "Download, parse, chunk and embed RBI Master Directions (Phase 1)"
+cmd = "python -m rbi_rag.ingest"
+
+[tool.poe.tasks.query]
+help = "Retrieve ranked chunks for a query (Phase 2)"
+cmd = "python -m rbi_rag.retrieve"
+
+[tool.poe.tasks.serve]
+help = "Run the FastAPI application (Phase 3)"
+cmd = "python -m rbi_rag.api"
+
+[tool.poe.tasks.eval]
+help = "Run the evaluation suite and write results/ (Phase 4)"
+cmd = "python -m rbi_rag.eval"
+
+
+# --------------------------------------------------------------------------
+# Lint / format
+# --------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Assertions and loose typing are fine in tests.
+"tests/**" = ["S101"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+
+# --------------------------------------------------------------------------
+# Type checking: strict on src/, relaxed on tests/
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pydantic-mypy]
+init_typed = true
+warn_required_dynamic_aliases = true
+
+
+# --------------------------------------------------------------------------
+# Tests
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config -q"
+markers = [
+    "integration: requires a running Postgres instance",
+    "live_llm: makes a real Anthropic API call (never run in CI)",
+]

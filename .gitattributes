@@ -1,0 +1,11 @@
+# Normalise to LF in the repository so the Linux CI runner and the Windows
+# working copy agree. Without this, shell scripts committed from Windows
+# arrive in CI with CRLF line endings and fail to execute.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+*.pdf binary
+*.png binary
+*.jpg binary
