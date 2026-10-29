@@ -25,7 +25,7 @@ Do not begin the next phase until asked.
 | Phase | Scope | Status |
 | ----- | ----------------------------- | ----------- |
 | 0 | Scaffold | done |
-| 1 | Ingestion | not started |
+| 1 | Ingestion | done |
 | 2 | Indexing and retrieval | not started |
 | 3 | Generation API | not started |
 | 4 | Evaluation | not started |
@@ -116,9 +116,16 @@ uv run poe db-down       # stop Postgres, keep data
 uv run poe db-nuke       # stop Postgres and delete the volume
 ```
 
-Unimplemented tasks (`ingest`, `query`, `serve`, `eval`) exit with status 2 and
-name the phase they belong to. Make them work when that phase arrives; never
-make them *appear* to work.
+```powershell
+uv run poe ingest harvest   # listing -> data/manifest.jsonl
+uv run poe ingest urls      # PDFs still to download
+uv run poe ingest status    # hash data/raw, report gaps
+uv run poe ingest process   # parse, clean, chunk
+```
+
+Unimplemented tasks (`query`, `serve`, `eval`) exit with status 2 and name the
+phase they belong to. Make them work when that phase arrives; never make them
+*appear* to work.
 
 ## Working with RBI's website
 
