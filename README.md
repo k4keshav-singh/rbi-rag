@@ -4,10 +4,11 @@ Question answering over public **RBI Master Directions**, returning answers with
 verifiable citations — circular number, page, and source URL — backed by a
 reproducible evaluation suite and an ablation study.
 
-> **Status: Phase 1 of 7 (ingestion).** Metadata harvesting, PDF parsing,
-> cleaning and chunking work. Nothing is indexed, retrieved or generated yet,
-> and there are no results to report. Every number in this README will come
-> from a script in this repository; none are written by hand.
+> **Status: Phase 2 of 7 (indexing and retrieval).** Ingestion, embedding,
+> and dense/keyword/hybrid retrieval with optional reranking all work.
+> Nothing is generated or evaluated yet, so there are no quality results to
+> report. Every number in this README will come from a script in this
+> repository; none are written by hand.
 
 **Live demo:** TODO (Phase 6)
 
@@ -95,7 +96,9 @@ uv sync --extra ml
 | `uv run poe ingest urls` | list PDFs still to download | now |
 | `uv run poe ingest status` | hash the raw store, report what is missing | now |
 | `uv run poe ingest process` | parse, clean and chunk what is present | now |
-| `uv run poe query "..."` | print ranked chunks with scores | Phase 2 |
+| `uv run poe index build` | embed a chunk set and index it | now |
+| `uv run poe index sets` | list chunk sets in the database | now |
+| `uv run poe query "..."` | print ranked chunks with scores | now |
 | `uv run poe serve` | run the API | Phase 3 |
 | `uv run poe eval` | reproduce the results tables | Phase 4 |
 
@@ -132,6 +135,43 @@ that are not really PDFs, which is what a saved bot-challenge page looks like.
 
 To work on a subset while developing, `uv run poe ingest process --limit 20`.
 
+## Retrieval
+
+Build an index from a chunk set, then query it.
+
+```powershell
+uv run poe db-up            # Postgres + pgvector on port 5434
+uv run poe index build      # embeds and indexes the default chunk set
+uv run poe query "what is the minimum capital adequacy ratio"
+```
+
+Every retriever is selected by flag, and the output shows which first-stage
+retriever found each chunk and at what rank:
+
+```powershell
+uv run poe query "..." --retriever dense     # vectors only
+uv run poe query "..." --retriever fts       # Postgres full-text only
+uv run poe query "..." --retriever hybrid    # both, fused with RRF
+uv run poe query "..." --rerank              # add the cross-encoder
+uv run poe query "..." --exact               # bypass HNSW, exact kNN
+```
+
+Embedding and reranking run on **onnxruntime**, not torch, so a normal install
+is about 130 MB rather than 2.5 GB. The ONNX backend is checked against
+sentence-transformers by `uv run poe test-parity`; see DECISIONS.md entry 0014
+for the measured agreement.
+
+## Tests
+
+```powershell
+uv run poe test              # unit: no database, no network, no models
+uv run poe test-integration  # needs `poe db-up`
+uv run poe test-model        # downloads models from HuggingFace
+uv run poe test-parity       # needs `uv sync --extra ml` (installs torch)
+```
+
+Only the first runs in CI.
+
 ## Repository layout
 
 See [CLAUDE.md](CLAUDE.md) for the full map and the conventions this project
@@ -159,8 +199,15 @@ already:
 - **Section detection falls back to a heuristic.** `section_aware` chunking
   prefers the PDF outline, but many RBI PDFs carry no bookmarks, in which case
   headings are detected by pattern matching.
-- Postgres full-text search is used as the keyword retriever. `ts_rank_cd` is
-  not BM25, and the evaluation will not claim otherwise.
+- **Postgres full-text search is not BM25.** `ts_rank_cd` has no
+  document-length normalisation of the kind BM25 applies and no tunable
+  k1/b, so this arm is reported as "FTS" and never as BM25. The `english`
+  configuration also stems with Snowball, which conflates regulatory terms a
+  lawyer would distinguish. See DECISIONS.md entry 0015.
+- **Recall is measured with exact search, not through HNSW.** An approximate
+  index loses some recall of its own, and mixing that into a comparison
+  between retrievers would make it indistinguishable from a real effect.
+  HNSW serves queries; evaluation bypasses it. See DECISIONS.md entry 0016.
 - Only public Master Directions are indexed. Amendments issued as separate
   circulars may not be reflected in the text of the parent Direction.
 

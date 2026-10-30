@@ -306,3 +306,178 @@ truncation configured. The 512-token cap belongs to the model, so a 1024-token
 chunk will be truncated silently inside `sentence-transformers` at embed time.
 Phase 2 must assert the model's real `max_seq_length` and refuse, or loudly
 record, any chunk that exceeds it. See the note in README under Limitations.
+
+---
+
+## 0014 — onnxruntime as the embedding backend, not sentence-transformers
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** The agreed stack names sentence-transformers, which means torch:
+roughly 2.5 GB on Windows. Phase 5 runs a retrieval eval in CI on every push,
+so that install cost recurs forever. Both `bge-small-en-v1.5` and
+`bge-reranker-base` publish ONNX exports under an MIT licence, and
+`onnxruntime` was already present in the dependency tree as a PyMuPDF
+transitive dependency.
+
+**Options.**
+- sentence-transformers, as specified: the reference implementation, zero
+  correctness risk, 2.5 GB.
+- onnxruntime: ~130 MB, CPU-fast, but pooling and normalisation have to be
+  implemented here rather than inherited.
+- Both: ONNX by default, sentence-transformers retained purely to validate it.
+
+**Choice.** The third. ONNX is the default; sentence-transformers stays in the
+`ml` extra and is used by nothing except `tests/test_embed_parity.py`.
+
+**Why.** The risk of hand-rolling pooling is real and specific: bge uses
+**CLS** pooling, not mean pooling, and getting that wrong produces vectors that
+look entirely plausible while retrieving worse. That is not a risk to argue
+away, so it is measured instead.
+
+**Measured.** Over the parity sentence set, against sentence-transformers:
+
+| Quantity | Value |
+| --- | --- |
+| Max elementwise difference | 1.639e-07 |
+| Mean elementwise difference | 3.202e-08 |
+| Minimum cosine similarity | 1.00000000 |
+| Dimension (ONNX / reference) | 384 / 384 |
+| Content-token limit (ONNX / reference) | 510 / 510 |
+
+That is float32 rounding, not an implementation difference. The parity suite
+also asserts the two backends rank the same sentences in the same order, since
+a difference too small to see could still reorder results.
+
+The parity test is excluded from the default suite and from CI, because
+installing torch on every push is the cost this decision exists to avoid. Run
+it with `uv sync --extra ml` and `uv run poe test-parity` whenever the embedder
+changes.
+
+This adds three direct dependencies — `onnxruntime`, `huggingface-hub` and
+`numpy` — all of which were already installed transitively, so the resolved
+environment is unchanged. They are declared explicitly because depending on
+another package's transitive dependencies is fragile.
+
+---
+
+## 0015 — Postgres full-text search as the keyword retriever
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** The hybrid retriever needs a lexical counterpart to dense search.
+The stack puts both in one database.
+
+**Options.** A separate search engine with real BM25, or Postgres full-text
+search with a GIN-indexed `tsvector`.
+
+**Choice.** Postgres FTS: a generated `tsvector` column using the `english`
+configuration, queried with `websearch_to_tsquery` and ranked by `ts_rank_cd`.
+
+**Why.** Entry 0001 already committed to one datastore. `websearch_to_tsquery`
+accepts quoted phrases and negation without throwing on input a user might
+reasonably type, which `to_tsquery` does not. The column is `GENERATED ALWAYS`
+so the index can never drift out of step with the text it indexes.
+
+**The caveat that must be reported.** `ts_rank_cd` is **not BM25**. It has no
+document-length normalisation of the kind BM25 applies, and no tunable k1/b.
+Calling this arm "BM25" in the results would be wrong, so it is called "FTS"
+everywhere. The `english` configuration also applies Snowball stemming, which
+is right for ordinary prose but conflates regulatory terms a lawyer would
+distinguish. If this arm underperforms, that is a candidate explanation and
+should be investigated rather than reported as a dense-versus-sparse finding.
+
+---
+
+## 0016 — Evaluation searches exactly; HNSW serves queries
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** HNSW is an approximate index: it trades recall for speed. The
+Phase 4 ablation compares retrievers on recall@k.
+
+**Options.** Measure through HNSW like production does, or measure with exact
+kNN and treat the index as a serving concern.
+
+**Choice.** `RetrievalConfig.exact` forces a sequential scan, evaluation sets
+it, and HNSW-versus-exact agreement is reported as its own number.
+
+**Why.** Running eval queries through an approximate index mixes the index's
+own recall loss into the retriever comparison, where it is indistinguishable
+from a real effect. With a corpus of roughly 19,000 chunks an exact scan is
+cheap, so there is no reason to accept that contamination. The index still
+exists and is still measured — just not as a hidden term in someone else's
+result. An integration test asserts the two orderings agree on the fixture
+corpus; if they ever diverge, every number measured through HNSW is suspect.
+
+---
+
+## 0017 — One partial HNSW index per chunk set
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** The ablation sweeps chunking strategy against chunk size, so
+several chunk sets live in the `chunks` table simultaneously and each query
+must see exactly one of them.
+
+**Options.** A single HNSW index over every row with a `chunk_set_id` filter,
+pgvector 0.8's `hnsw.iterative_scan`, or a partial index per set.
+
+**Choice.** A partial index per set, created by the index builder.
+
+**Why.** A shared index forces post-filtering: HNSW returns its nearest
+neighbours across all sets and the filter then discards most of them, so the
+effective recall for any one set is far below what the index would give on its
+own. That is the problem in entry 0016 wearing a different hat. A partial index
+contains only its own set, so no filtering is needed. Six configurations means
+six small indexes, which costs build time and nothing else. An integration test
+asserts the index definition really is restricted to its chunk set.
+
+---
+
+## 0018 — Reciprocal Rank Fusion in Python, not SQL
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** Hybrid retrieval fuses a dense ranking with a keyword ranking.
+Both come from the same database, so the fusion could be a single SQL query.
+
+**Options.** One SQL statement with CTEs, or two queries fused in Python.
+
+**Choice.** Two queries, fused in `retrieve/fuse.py`.
+
+**Why.** The Phase 2 done-criterion is that every retriever is unit-tested and
+switchable purely by config. Fusion in Python is a pure function over lists of
+ids: its tests need no database, no fixtures and no Postgres running, and they
+can assert the property that justifies RRF at all — that a chunk both
+retrievers rank beats a chunk only one of them ranks. The same logic in SQL
+would only be testable through an integration test.
+
+It also avoids inventing a normalisation. Dense scores are cosine similarities
+in [-1, 1]; `ts_rank_cd` is unbounded and scaled differently. RRF uses only
+rank positions, so the two never need to be made commensurable. The cost is one
+extra round trip per hybrid query.
+
+---
+
+## 0019 — The container's Postgres listens on 5434
+
+**Date:** 2026-10-30 · **Phase:** 2
+
+**Context.** Integration tests failed with `password authentication failed for
+user "rbi"` while the container reported healthy and `docker compose exec psql`
+worked. A locally installed PostgreSQL 18 service was listening on 5432 and
+answering instead of the container. 5433 was then held by a stale Docker
+binding.
+
+**Options.** Ask the developer to stop their local Postgres, or move the
+container off the contested port.
+
+**Choice.** Default `POSTGRES_PORT` to 5434, used by both `docker-compose.yml`
+and the DSN in `Settings`, so the two cannot disagree.
+
+**Why.** A natively installed Postgres on 5432 is common on developer machines,
+and this failure mode is unusually confusing: the container is healthy, the
+credentials are right, and the error says the password is wrong. Stopping
+someone's local database to run a side project is the wrong trade. Changing one
+setting is not.

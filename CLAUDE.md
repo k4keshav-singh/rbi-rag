@@ -26,7 +26,7 @@ Do not begin the next phase until asked.
 | ----- | ----------------------------- | ----------- |
 | 0 | Scaffold | done |
 | 1 | Ingestion | done |
-| 2 | Indexing and retrieval | not started |
+| 2 | Indexing and retrieval | done |
 | 3 | Generation API | not started |
 | 4 | Evaluation | not started |
 | 5 | CI eval gate | not started |
@@ -73,8 +73,10 @@ Chosen deliberately; do not swap a component without a `DECISIONS.md` entry.
 - **FastAPI + Pydantic v2** — typed API and schemas.
 - **PostgreSQL 16 + pgvector** — one database for dense vectors *and* keyword
   search (Postgres full-text search with `tsvector` as the BM25-style retriever).
-- **Embeddings** — `BAAI/bge-small-en-v1.5` via sentence-transformers, local.
-- **Reranker** — `BAAI/bge-reranker-base` cross-encoder, local.
+- **Embeddings** — `BAAI/bge-small-en-v1.5`, local, run on **onnxruntime**
+  rather than sentence-transformers (DECISIONS.md 0014). torch is never
+  installed outside the `ml` extra, which exists only for the parity test.
+- **Reranker** — `BAAI/bge-reranker-base` cross-encoder, local, also ONNX.
 - **Fusion** — Reciprocal Rank Fusion.
 - **LLM** — Anthropic API, model from `ANTHROPIC_MODEL`.
 - **PDF parsing** — PyMuPDF.
@@ -110,7 +112,10 @@ New shared models go there, not into whichever package happened to need one firs
 uv sync                  # install dependencies
 uv run poe lint          # ruff check + ruff format --check + mypy
 uv run poe fmt           # auto-fix and format
-uv run poe test          # pytest
+uv run poe test          # unit tests only (no db, no network, no models)
+uv run poe test-integration  # needs db-up
+uv run poe test-model    # downloads models
+uv run poe test-parity   # needs: uv sync --extra ml
 uv run poe db-up         # start Postgres, wait for healthy
 uv run poe db-down       # stop Postgres, keep data
 uv run poe db-nuke       # stop Postgres and delete the volume
@@ -123,9 +128,27 @@ uv run poe ingest status    # hash data/raw, report gaps
 uv run poe ingest process   # parse, clean, chunk
 ```
 
-Unimplemented tasks (`query`, `serve`, `eval`) exit with status 2 and name the
-phase they belong to. Make them work when that phase arrives; never make them
+```powershell
+uv run poe index migrate    # apply SQL migrations
+uv run poe index build      # embed and index a chunk set
+uv run poe index sets       # list chunk sets
+uv run poe query "..."      # ranked chunks, with per-retriever provenance
+```
+
+Unimplemented tasks (`serve`, `eval`) exit with status 2 and name the phase
+they belong to. Make them work when that phase arrives; never make them
 *appear* to work.
+
+## Measurement rules that bind later phases
+
+- Evaluation retrieves with `RetrievalConfig.exact = True`. HNSW is
+  approximate, and its recall loss must never be folded into a comparison
+  between retrievers.
+- The keyword arm is called **FTS**, never BM25. `ts_rank_cd` is a different
+  ranking function.
+- Chunks longer than the embedding window (510 content tokens) are truncated
+  when embedded. `poe index build` counts them; any result involving
+  1024-token chunks must report that count beside it.
 
 ## Working with RBI's website
 
