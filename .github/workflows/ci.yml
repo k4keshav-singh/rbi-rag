@@ -30,3 +30,49 @@ jobs:
 
       - name: Test
         run: uv run poe test
+
+  eval-gate:
+    # Fails the build when retrieval regresses against the committed baseline.
+    #
+    # Runs against real Postgres, not the in-memory store. The in-memory
+    # keyword search scores by term overlap while Postgres uses ts_rank_cd, and
+    # that divergence once let a completely broken FTS retriever pass the whole
+    # unit suite. A gate that measures the fake measures the wrong thing.
+    #
+    # Query vectors are committed with the snapshot, so no model is downloaded
+    # and the job needs no network beyond the checkout and the dependency
+    # install. The embedder itself is covered by `poe test-model`, not here.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rbi
+          POSTGRES_PASSWORD: rbi
+          POSTGRES_DB: rbi_rag
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5434
+      POSTGRES_USER: rbi
+      POSTGRES_PASSWORD: rbi
+      POSTGRES_DB: rbi_rag
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: uv sync --locked
+
+      - name: Retrieval regression gate
+        run: uv run poe eval gate

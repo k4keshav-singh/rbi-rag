@@ -1,0 +1,35 @@
+{
+  "section_aware-512-dense-norerank": {
+    "mrr": 1.0,
+    "ndcg@1": 1.0,
+    "ndcg@10": 1.0,
+    "ndcg@3": 1.0,
+    "ndcg@5": 1.0,
+    "recall@1": 1.0,
+    "recall@10": 1.0,
+    "recall@3": 1.0,
+    "recall@5": 1.0
+  },
+  "section_aware-512-fts-norerank": {
+    "mrr": 0.875,
+    "ndcg@1": 0.75,
+    "ndcg@10": 0.9077324383928644,
+    "ndcg@3": 0.9077324383928644,
+    "ndcg@5": 0.9077324383928644,
+    "recall@1": 0.75,
+    "recall@10": 1.0,
+    "recall@3": 1.0,
+    "recall@5": 1.0
+  },
+  "section_aware-512-hybrid-norerank": {
+    "mrr": 0.875,
+    "ndcg@1": 0.75,
+    "ndcg@10": 0.9077324383928644,
+    "ndcg@3": 0.9077324383928644,
+    "ndcg@5": 0.9077324383928644,
+    "recall@1": 0.75,
+    "recall@10": 1.0,
+    "recall@3": 1.0,
+    "recall@5": 1.0
+  }
+}

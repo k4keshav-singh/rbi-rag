@@ -152,15 +152,20 @@ def write_snapshot(
         raise SnapshotError(f"{len(questions)} questions but {len(query_vectors)} vectors")
 
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / MANIFEST).write_text(
-        json.dumps(asdict(manifest), indent=2, sort_keys=True), encoding="utf-8"
-    )
+    _write_json(directory / MANIFEST, asdict(manifest))
     _write_jsonl(directory / CHUNKS, [c.model_dump_json() for c in chunks])
     _write_jsonl(directory / QUESTIONS, [q.model_dump_json() for q in questions])
     np.save(directory / EMBEDDINGS, np.asarray(embeddings, dtype=np.float32))
     np.save(directory / QUERY_VECTORS, np.asarray(query_vectors, dtype=np.float32))
-    (directory / BASELINE).write_text(
-        json.dumps(baseline, indent=2, sort_keys=True), encoding="utf-8"
+    _write_json(directory / BASELINE, baseline)
+
+
+def _write_json(path: Path, payload: object) -> None:
+    """Write pretty JSON with a trailing newline, as every other file here has."""
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
 

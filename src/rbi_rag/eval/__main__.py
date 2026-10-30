@@ -355,7 +355,9 @@ def cmd_snapshot(settings: Settings, chunk_set_id: int | None, baseline_only: bo
 
     baseline = gate.baseline_from(measured)
     (settings.snapshot_dir / snap.BASELINE).write_text(
-        json.dumps(baseline, indent=2, sort_keys=True), encoding="utf-8"
+        json.dumps(baseline, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     print(f"recorded a baseline for {len(baseline)} arm(s) in {settings.snapshot_dir}")
     for arm, metrics in sorted(baseline.items()):
