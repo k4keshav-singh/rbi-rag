@@ -229,14 +229,50 @@ class PostgresChunkStore:
             return [_row_to_scored(row) for row in cursor.fetchall()]
 
     def fts_search(self, query: str, *, chunk_set_id: int, limit: int) -> list[ScoredChunk]:
+        """Keyword search over one chunk set.
+
+        The query is a **disjunction** of its own lexemes, not
+        ``websearch_to_tsquery``. That function is conjunctive: the question
+        "what minimum capital ratio must banks maintain" becomes
+        ``minimum & capit & ratio & must & bank & maintain``, and a passage
+        saying exactly the right thing still fails because it lacks "must".
+        Measured on the fixture corpus, that returned nothing for a question
+        whose answer was sitting in the index, which would have been reported
+        as a finding about keyword retrieval rather than the bug it was.
+
+        Lexical retrieval is disjunctive and ranked -- BM25 works this way too
+        -- so terms are OR-ed and ``ts_rank_cd`` discriminates. The lexemes
+        come from Postgres's own tokenizer, so nothing user-supplied is
+        interpolated. A query of nothing but stopwords yields a NULL tsquery
+        and therefore no rows, rather than a syntax error.
+
+        The cost: explicit operators (quoted phrases, negation) are not
+        honoured here. This retriever serves natural-language questions, where
+        conjunctive matching is by far the greater loss.
+        """
         with self._connection.cursor() as cursor:
             cursor.execute(
                 f"""
-                SELECT {_CHUNK_COLUMNS}, ts_rank_cd(c.tsv, q) AS score
+                WITH q AS (
+                    SELECT to_tsquery(
+                        'english',
+                        NULLIF(
+                            array_to_string(
+                                ARRAY(
+                                    SELECT lexeme
+                                    FROM unnest(to_tsvector('english', %s))
+                                ),
+                                ' | '
+                            ),
+                            ''
+                        )
+                    ) AS query
+                )
+                SELECT {_CHUNK_COLUMNS}, ts_rank_cd(c.tsv, q.query) AS score
                 FROM chunks c
                 JOIN chunk_sets s USING (chunk_set_id),
-                     websearch_to_tsquery('english', %s) q
-                WHERE c.chunk_set_id = %s AND c.tsv @@ q
+                     q
+                WHERE c.chunk_set_id = %s AND c.tsv @@ q.query
                 ORDER BY score DESC
                 LIMIT %s
                 """,
@@ -283,6 +319,11 @@ class InMemoryChunkStore:
     to give fusion and ranking logic something deterministic to work against.
     Anything that depends on Postgres ranking specifically belongs in an
     integration test.
+
+    Both stores match **disjunctively**. They did not always: this fake OR-ed
+    its terms while Postgres AND-ed them, so unit tests passed on questions
+    that returned nothing against the real database. Keep the two agreeing on
+    semantics, or the fake stops being evidence about anything.
     """
 
     def __init__(self) -> None:

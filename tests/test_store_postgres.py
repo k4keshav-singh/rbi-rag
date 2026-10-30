@@ -233,9 +233,41 @@ class TestFtsSearch:
     ) -> None:
         assert store.fts_search("zygomorphic", chunk_set_id=populated, limit=5) == []
 
-    def test_quoted_phrases_are_accepted(self, store: PostgresChunkStore, populated: int) -> None:
-        """websearch_to_tsquery must not choke on operators a user might type."""
+    def test_a_natural_language_question_matches(
+        self, store: PostgresChunkStore, populated: int
+    ) -> None:
+        """Regression: conjunctive matching returned nothing for questions.
+
+        websearch_to_tsquery builds `minimum & capit & ratio & must & bank &
+        maintain`, and the passage that answers this does not contain "must",
+        so every arm scored zero. Lexical retrieval has to be disjunctive.
+        """
+        results = store.fts_search(
+            "what minimum capital ratio must banks maintain",
+            chunk_set_id=populated,
+            limit=5,
+        )
+        assert results, "a question whose answer is indexed must match something"
+        assert results[0].chunk.chunk_id == "a"
+
+    def test_a_query_of_only_stopwords_returns_nothing_rather_than_erroring(
+        self, store: PostgresChunkStore, populated: int
+    ) -> None:
+        """An empty lexeme list would be a to_tsquery syntax error."""
+        assert store.fts_search("the and of", chunk_set_id=populated, limit=5) == []
+
+    def test_search_operators_are_not_honoured_but_do_not_crash(
+        self, store: PostgresChunkStore, populated: int
+    ) -> None:
+        """The documented cost of going disjunctive."""
         assert store.fts_search('"capital adequacy" -liquidity', chunk_set_id=populated, limit=5)
+
+    def test_ranking_prefers_the_denser_match(
+        self, store: PostgresChunkStore, populated: int
+    ) -> None:
+        """OR-matching without good ranking would be useless."""
+        results = store.fts_search("capital adequacy ratio", chunk_set_id=populated, limit=5)
+        assert results[0].chunk.chunk_id == "a"
 
     def test_scores_are_descending(self, store: PostgresChunkStore, populated: int) -> None:
         results = store.fts_search("capital", chunk_set_id=populated, limit=5)
