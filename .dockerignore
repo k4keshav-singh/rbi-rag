@@ -1,0 +1,27 @@
+# Keep the build context small and free of anything secret or machine-local.
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+
+# Secrets and local state
+.env
+.env.*
+!.env.example
+
+# Re-creatable, and large
+data/
+results/
+eval/snapshot/
+
+# Not needed at runtime
+tests/
+docs/
+infra/
+DECISIONS.md
+CLAUDE.md
+AGENTS.md
