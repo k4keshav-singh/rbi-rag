@@ -7,6 +7,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic>=0.39",
     "fastapi>=0.115",
+    "huggingface-hub>=0.26",
+    "numpy>=2.0",
+    "onnxruntime>=1.20",
     "pgvector>=0.3",
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",
@@ -16,7 +19,9 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
-# Heavy ML dependencies live here so Phase 0 CI does not install torch.
+# Heavy ML dependencies live here so CI never installs torch. Embedding and
+# reranking run on onnxruntime; sentence-transformers is kept only as the
+# reference implementation the ONNX parity test checks against.
 # Install with: uv sync --extra ml
 [project.optional-dependencies]
 ml = [
@@ -62,8 +67,20 @@ sequence = [
 ]
 
 [tool.poe.tasks.test]
-help = "Run the test suite"
+help = "Run unit tests (no database, no network)"
 cmd = "pytest"
+
+[tool.poe.tasks.test-integration]
+help = "Run tests that need Postgres (start it with db-up first)"
+cmd = "pytest -m integration"
+
+[tool.poe.tasks.test-model]
+help = "Run tests that download models from HuggingFace"
+cmd = "pytest -m model"
+
+[tool.poe.tasks.test-parity]
+help = "Check the ONNX embedder against sentence-transformers (needs: uv sync --extra ml)"
+cmd = "pytest -m parity"
 
 [tool.poe.tasks.db-up]
 help = "Start Postgres + pgvector and wait until healthy"
@@ -86,8 +103,12 @@ help = "Download, parse, chunk and embed RBI Master Directions (Phase 1)"
 cmd = "python -m rbi_rag.ingest"
 
 [tool.poe.tasks.query]
-help = "Retrieve ranked chunks for a query (Phase 2)"
+help = "Retrieve ranked chunks for a query"
 cmd = "python -m rbi_rag.retrieve"
+
+[tool.poe.tasks.index]
+help = "Apply migrations and build the search index"
+cmd = "python -m rbi_rag.index"
 
 [tool.poe.tasks.serve]
 help = "Run the FastAPI application (Phase 3)"
@@ -146,6 +167,16 @@ disallow_untyped_defs = false
 module = "rbi_rag.ingest.parse"
 disallow_untyped_calls = false
 
+# onnxruntime ships no py.typed marker; sentence-transformers is only
+# installed with the ml extra, so it is absent on the normal path.
+[[tool.mypy.overrides]]
+module = ["onnxruntime.*", "sentence_transformers.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["rbi_rag.index.embed", "rbi_rag.retrieve.rerank"]
+disallow_untyped_calls = false
+
 [tool.pydantic-mypy]
 init_typed = true
 warn_required_dynamic_aliases = true
@@ -156,8 +187,11 @@ warn_required_dynamic_aliases = true
 # --------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--strict-markers --strict-config -q"
+# Default run is unit tests only: no database, no network, no model downloads.
+addopts = "--strict-markers --strict-config -q -m 'not integration and not parity and not model'"
 markers = [
     "integration: requires a running Postgres instance",
+    "parity: compares the ONNX embedder against sentence-transformers (needs --extra ml)",
+    "model: downloads a model from HuggingFace on first run",
     "live_llm: makes a real Anthropic API call (never run in CI)",
 ]

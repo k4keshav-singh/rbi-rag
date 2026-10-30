@@ -15,7 +15,7 @@ def make_settings(**overrides: object) -> Settings:
 
 def test_defaults_are_stable_without_a_dotenv() -> None:
     settings = make_settings()
-    assert settings.postgres_port == 5432
+    assert settings.postgres_port == 5434
     assert settings.postgres_db == "rbi_rag"
     assert settings.embedding_dim == 384
     assert settings.retriever == "hybrid"
@@ -32,7 +32,7 @@ def test_environment_overrides_defaults(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_dsn_is_assembled_from_parts() -> None:
     settings = make_settings()
-    assert settings.postgres_dsn == "postgresql://rbi:rbi@localhost:5432/rbi_rag"
+    assert settings.postgres_dsn == "postgresql://rbi:rbi@localhost:5434/rbi_rag"
 
 
 def test_password_is_not_leaked_by_repr() -> None:

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 ChunkStrategy = Literal["fixed_tokens", "section_aware"]
 QuestionType = Literal["factual", "multi_hop", "unanswerable"]
+RetrieverName = Literal["dense", "fts", "hybrid"]
 
 
 class Document(BaseModel):
@@ -128,3 +129,28 @@ class Citation(BaseModel):
     page_end: int = Field(ge=1)
     url: str
     quote: str | None = None
+
+
+class RetrievalConfig(BaseModel):
+    """Everything that decides how a query is answered.
+
+    The Phase 4 ablation varies these and nothing else, so a run is fully
+    described by one of these objects plus the chunk set it points at.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    retriever: RetrieverName = "hybrid"
+    chunk_set_id: int = Field(ge=1)
+    top_k: int = Field(default=10, ge=1)
+    candidate_k: int = Field(
+        default=50, ge=1, description="Depth fetched from each retriever before fusion."
+    )
+    rrf_k: int = Field(default=60, ge=1, description="RRF smoothing constant.")
+    rerank: bool = False
+    rerank_candidates: int = Field(default=50, ge=1)
+    use_query_instruction: bool = False
+    exact: bool = Field(
+        default=False,
+        description="Bypass the HNSW index for exact kNN. Evaluation sets this.",
+    )

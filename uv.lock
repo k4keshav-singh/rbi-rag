@@ -1163,6 +1163,9 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "fastapi" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -1193,6 +1196,9 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.39" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "huggingface-hub", specifier = ">=0.26" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },

@@ -8,7 +8,9 @@ from rbi_rag.schemas.core import (
     ManifestEntry,
     PageText,
     QuestionType,
+    RetrievalConfig,
     RetrievedChunk,
+    RetrieverName,
     Section,
 )
 
@@ -20,6 +22,8 @@ __all__ = [
     "ManifestEntry",
     "PageText",
     "QuestionType",
+    "RetrievalConfig",
     "RetrievedChunk",
+    "RetrieverName",
     "Section",
 ]

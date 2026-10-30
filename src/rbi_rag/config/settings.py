@@ -13,11 +13,12 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rbi_rag.schemas import ChunkStrategy, RetrieverName
+
 #: Repository root, derived from this file's location (src/rbi_rag/config/settings.py).
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-RetrieverName = Literal["dense", "fts", "hybrid"]
-ChunkStrategyName = Literal["fixed_tokens", "section_aware"]
+EmbeddingBackend = Literal["onnx", "sentence_transformers"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -33,7 +34,9 @@ class Settings(BaseSettings):
 
     # --- Postgres ---
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    # 5434, not 5432: a natively installed Postgres commonly occupies 5432 and
+    # would answer instead of the container, failing auth in a confusing way.
+    postgres_port: int = 5434
     postgres_user: str = "rbi"
     postgres_password: SecretStr = SecretStr("rbi")
     postgres_db: str = "rbi_rag"
@@ -46,6 +49,17 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dim: int = 384
     reranker_model: str = "BAAI/bge-reranker-base"
+    embedding_backend: EmbeddingBackend = "onnx"
+    onnx_file: str = Field(
+        default="onnx/model.onnx",
+        description="Path of the ONNX export inside the model repository.",
+    )
+    embedding_batch_size: int = Field(default=32, ge=1)
+
+    # bge-*-v1.5 works well without an instruction; the model card says to pick
+    # whichever performs better on the task, so this is an ablation dimension.
+    use_query_instruction: bool = False
+    query_instruction: str = "Represent this sentence for searching relevant passages: "
 
     # --- Ingestion ---
     download_delay_seconds: float = Field(
@@ -58,7 +72,7 @@ class Settings(BaseSettings):
     listing_url: str = "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx"
 
     # --- Chunking (the ablation sweeps these; these are the defaults) ---
-    chunk_strategy: ChunkStrategyName = "section_aware"
+    chunk_strategy: ChunkStrategy = "section_aware"
     chunk_size: int = Field(default=512, ge=1)
     chunk_overlap_ratio: float = Field(default=0.15, ge=0.0, lt=1.0)
 
@@ -69,9 +83,17 @@ class Settings(BaseSettings):
     # --- Retrieval defaults (overridable per request and per ablation run) ---
     retriever: RetrieverName = "hybrid"
     top_k: int = Field(default=10, ge=1)
+    candidate_k: int = Field(
+        default=50, ge=1, description="Per-retriever depth fetched before fusion."
+    )
     rrf_k: int = Field(default=60, ge=1)
     rerank_enabled: bool = True
+    rerank_candidates: int = Field(default=50, ge=1)
     abstain_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+
+    # HNSW is approximate. Evaluation uses exact search so that index recall
+    # loss is never mistaken for a difference between retrievers.
+    exact_search: bool = False
 
     # --- Logging ---
     log_level: LogLevel = "INFO"
