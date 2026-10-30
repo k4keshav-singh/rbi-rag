@@ -16,7 +16,7 @@ import pytest
 
 from rbi_rag.config import get_settings
 from rbi_rag.index.migrate import migrate
-from rbi_rag.index.store import PostgresChunkStore
+from rbi_rag.index.store import PostgresChunkStore, connect
 from rbi_rag.schemas import Chunk, Document
 
 pytestmark = pytest.mark.integration
@@ -290,3 +290,65 @@ class TestHnswIndex:
             definition = cursor.fetchone()[0]
         assert "hnsw" in definition.lower()
         assert f"chunk_set_id = {populated}" in definition
+
+
+class TestFreshDatabaseBootstrap:
+    """connect() must work against a database nobody has migrated yet.
+
+    Regression: register_vector needs the `vector` type to exist, so on a
+    brand-new database the very first connection failed with "vector type not
+    found in the database" -- before the migration that creates the extension
+    could run. Every local database had carried the extension since the first
+    manual check, so only CI, against a container seconds old, ever saw it.
+
+    This test makes its own empty database rather than dropping the extension
+    from the shared one, where DROP EXTENSION CASCADE would take the
+    chunks.embedding column with it.
+    """
+
+    def test_a_brand_new_database_can_be_connected_to(self) -> None:
+        import uuid
+
+        settings = get_settings()
+        name = f"rbi_rag_fresh_{uuid.uuid4().hex[:8]}"
+
+        try:
+            admin = psycopg.connect(settings.postgres_dsn, autocommit=True, connect_timeout=5)
+        except psycopg.OperationalError as exc:
+            pytest.skip(f"Postgres is not reachable ({exc}); run `uv run poe db-up`")
+
+        try:
+            admin.execute(f'CREATE DATABASE "{name}"')
+            fresh_dsn = settings.postgres_dsn.rsplit("/", 1)[0] + f"/{name}"
+
+            # The assertion is simply that this does not raise.
+            with connect(fresh_dsn) as connection, connection.cursor() as cursor:
+                cursor.execute("SELECT exists(SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+                assert cursor.fetchone()[0] is True, "connect() should have created it"
+        finally:
+            admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            admin.close()
+
+    def test_migrations_apply_to_a_brand_new_database(self) -> None:
+        """The whole bootstrap path, not just the connection."""
+        import uuid
+
+        settings = get_settings()
+        name = f"rbi_rag_fresh_{uuid.uuid4().hex[:8]}"
+
+        try:
+            admin = psycopg.connect(settings.postgres_dsn, autocommit=True, connect_timeout=5)
+        except psycopg.OperationalError as exc:
+            pytest.skip(f"Postgres is not reachable ({exc}); run `uv run poe db-up`")
+
+        try:
+            admin.execute(f'CREATE DATABASE "{name}"')
+            fresh_dsn = settings.postgres_dsn.rsplit("/", 1)[0] + f"/{name}"
+
+            with connect(fresh_dsn) as connection:
+                applied = migrate(connection)
+                assert "001_initial" in applied
+                assert migrate(connection) == [], "re-running must be a no-op"
+        finally:
+            admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            admin.close()

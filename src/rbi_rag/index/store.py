@@ -53,12 +53,34 @@ class ChunkStore(Protocol):
 
 @contextmanager
 def connect(dsn: str) -> Any:
-    """Open a connection with the pgvector type adapters registered."""
+    """Open a connection with the pgvector type adapters registered.
+
+    Registering the adapters needs the ``vector`` type to already exist, and on
+    a database nobody has migrated yet it does not -- so the first connection
+    any fresh install makes would fail with "vector type not found in the
+    database", before the migration that creates the extension could run. The
+    extension is therefore created here on that first attempt.
+
+    This never showed up in development because the local database had carried
+    the extension since the first manual check. It took a CI run against a
+    container created seconds earlier to expose it, which is the argument for
+    the gate job using a real, empty database.
+    """
     from pgvector.psycopg import register_vector
 
     connection = psycopg.connect(dsn)
     try:
-        register_vector(connection)
+        try:
+            register_vector(connection)
+        except psycopg.ProgrammingError:
+            # The failed lookup leaves the transaction unusable, so clear it
+            # before issuing DDL. CREATE EXTENSION is idempotent and the
+            # migration runs it too; this only unblocks the very first connect.
+            connection.rollback()
+            with connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            connection.commit()
+            register_vector(connection)
         yield connection
     finally:
         connection.close()
