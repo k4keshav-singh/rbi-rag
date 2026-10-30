@@ -111,7 +111,7 @@ help = "Apply migrations and build the search index"
 cmd = "python -m rbi_rag.index"
 
 [tool.poe.tasks.serve]
-help = "Run the FastAPI application (Phase 3)"
+help = "Run the FastAPI application"
 cmd = "python -m rbi_rag.api"
 
 [tool.poe.tasks.eval]
