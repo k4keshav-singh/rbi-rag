@@ -27,7 +27,7 @@ Do not begin the next phase until asked.
 | 0 | Scaffold | done |
 | 1 | Ingestion | done |
 | 2 | Indexing and retrieval | done |
-| 3 | Generation API | not started |
+| 3 | Generation API | done |
 | 4 | Evaluation | not started |
 | 5 | CI eval gate | not started |
 | 6 | Frontend and AWS | not started |
@@ -135,8 +135,8 @@ uv run poe index sets       # list chunk sets
 uv run poe query "..."      # ranked chunks, with per-retriever provenance
 ```
 
-Unimplemented tasks (`serve`, `eval`) exit with status 2 and name the phase
-they belong to. Make them work when that phase arrives; never make them
+Unimplemented tasks (`eval`) exit with status 2 and name the phase they
+belong to. Make them work when that phase arrives; never make them
 *appear* to work.
 
 ## Measurement rules that bind later phases
@@ -149,6 +149,12 @@ they belong to. Make them work when that phase arrives; never make them
 - Chunks longer than the embedding window (510 content tokens) are truncated
   when embedded. `poe index build` counts them; any result involving
   1024-token chunks must report that count beside it.
+- Abstention thresholds and `ANTHROPIC_EFFORT` are untuned and must be swept
+  in Phase 4, not guessed. `abstain_min_score` is deliberately `None`.
+- `cost_usd` is arithmetic over a dated price table, never an estimate. An
+  unpriced model reports `None`.
+- A citation whose quote is not verbatim in its chunk is a failure, not a
+  near miss. The pipeline abstains rather than stripping bad citations.
 
 ## Working with RBI's website
 

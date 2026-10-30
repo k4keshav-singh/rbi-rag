@@ -481,3 +481,171 @@ and this failure mode is unusually confusing: the container is healthy, the
 credentials are right, and the error says the password is wrong. Stopping
 someone's local database to run a side project is the wrong trade. Changing one
 setting is not.
+
+---
+
+## 0020 — Abstention has two gates, and no invented threshold
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** The brief asks the system to abstain when retrieval confidence is
+low, with a configurable threshold. The setting that existed,
+`abstain_threshold = 0.35`, was incoherent: the three retrievers return scores
+on unrelated scales. Measured in Phase 2 on the same query — dense cosine
+**0.83**, `ts_rank_cd` **0.00185**, RRF **0.03279**. One cutoff across all three
+abstains on every hybrid and keyword query and never on a dense one, while
+looking like a working safety feature.
+
+**Options.** Per-retriever thresholds; normalise the scores onto a common
+scale; threshold only a signal that is already comparable; or drop the
+retrieval gate and rely on the model's own judgement.
+
+**Choice.** Two independent gates.
+
+1. A retrieval gate, compared against the **reranker score** where there is
+   one and the **raw dense cosine** otherwise. Never against an RRF score. When
+   neither exists — a keyword-only query — the gate does not fire, because
+   there is no comparable number and `ts_rank_cd` is not one. This is why
+   `dense_score` is carried on `RetrievedChunk` separately from `score`.
+2. The model's own `sufficient_evidence` field, which always applies.
+
+**Why the threshold ships as `None`.** Picking a number now would mean
+reporting a threshold nobody measured, which rule 1 forbids. Phase 4 produces
+labelled unanswerable questions; that is the first point at which a defensible
+value exists. Until then gate 2 does the work, and gate 1 is plumbing waiting
+for its number.
+
+---
+
+## 0021 — Citations are validated at the quote, and the pipeline fails closed
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** The brief requires that every cited chunk be in the retrieved set.
+That check alone is weaker than it sounds: a model can attach a fluent,
+confident, entirely invented sentence to a chunk_id it really was shown, and an
+id-only check passes it.
+
+**Options.** Check ids only; check ids and quotes; or check quotes with fuzzy
+matching to tolerate near-misses.
+
+**Choice.** Both checks, with exact matching after whitespace normalisation,
+and failure closes the door: one retry with the violations fed back, then
+abstention.
+
+**Why.** Whitespace normalisation forgives line wrapping, which is an artifact
+of PDF rendering and not a different quote. Nothing else is forgiven — no case
+folding, no punctuation stripping, no fuzzy similarity — because a quote that
+differs by a word is a different claim, and a system whose entire value is
+verifiability cannot ship "close enough". Quotes under 12 characters are
+rejected: a fragment that short appears everywhere and evidences nothing.
+
+Two further rules follow from the same reasoning. An answer that passes
+validation but cites **nothing** is treated as a failure, since an uncited
+claim is unverifiable however plausible it reads. And when retries are
+exhausted the system abstains rather than returning the answer with the bad
+citations stripped — stripping would leave a confident answer whose support had
+just been shown to be fabricated.
+
+---
+
+## 0022 — Structured output through `messages.parse`, not prefill or forced tools
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** The answer, its citations and its abstention flag have to come
+back as parseable structure, not prose to be regexed.
+
+**Options.** Assistant prefill to open a JSON object; a forced `tool_choice` so
+the model must call a schema-shaped tool; or the structured-output API.
+
+**Choice.** `client.messages.parse(output_format=AnswerPayload)` with
+`output_config`.
+
+**Why.** The first two are the familiar tricks and both now return **400** on
+current models: assistant prefill is rejected, and forced `tool_choice`
+(`any`/`tool`) is rejected on Claude Sonnet 5.5. Structured outputs is the
+supported path and validates the response against the Pydantic model, which is
+what we wanted anyway.
+
+Three related constraints are recorded in `generate/client.py` because each is
+a 400 if got wrong: thinking cannot be disabled on this model (depth is set
+with `output_config.effort`), thinking tokens count against `max_tokens`, and
+`temperature`/`top_p`/`top_k` were removed API-wide.
+
+---
+
+## 0023 — Costs come from a dated table, and unknown models cost `None`
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** `/query` reports `cost_usd`. Prices change, and a figure computed
+from a stale table is wrong without saying so.
+
+**Options.** Hard-code prices inline; put them in settings; or keep a table
+that carries its own date.
+
+**Choice.** A table in `generate/cost.py` with `PRICE_TABLE_DATE`, surfaced on
+`/health`. A model with no entry yields `None`, never an estimate.
+
+**Why.** Prices are reference data about the world, not per-deployment
+configuration, so settings is the wrong home. The date is the point: it makes
+staleness visible instead of letting an old number flow into the Phase 4 cost
+column as though it were current. Returning `None` for an unpriced model is the
+same rule as everywhere else in this project — no number appears unless
+something measured it. Cached reads and cache writes are billed at their own
+rates rather than folded into input tokens, a difference of an order of
+magnitude.
+
+---
+
+## 0024 — Claude Sonnet 5.5 as the default model
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** Anthropic's current guidance is to default to `claude-opus-5-5`
+and to treat choosing a cheaper model as the user's decision. Phase 4 runs an
+LLM-as-judge over every eval item, so the model choice is multiplied by the
+size of the eval set.
+
+**Options.** `claude-opus-5-5` at $4/$20 per MTok, or `claude-sonnet-5-5` at
+$2/$10.
+
+**Choice.** `claude-sonnet-5-5`, chosen by the repository owner.
+
+**Why.** Roughly half the cost on a workload — answering from supplied
+excerpts — that is extraction and synthesis rather than open-ended reasoning.
+`ANTHROPIC_MODEL` overrides it per run, so answering and judging can use
+different models, and Phase 4 should report which model produced which numbers
+rather than leaving it implicit.
+
+`ANTHROPIC_EFFORT` defaults to `medium` and is **untuned**. The model's own
+default is `high`, which is calibrated for agentic and coding work; answering
+from supplied context is neither. Phase 4 should sweep it rather than leaving
+it to taste.
+
+---
+
+## 0025 — The API starts degraded rather than refusing to boot
+
+**Date:** 2026-10-30 · **Phase:** 3
+
+**Context.** The application needs an Anthropic key, a database and local model
+files. Any of them can be missing in a fresh checkout or a bad deployment.
+
+**Options.** Fail startup on the first missing dependency, or start and report
+health per dependency.
+
+**Choice.** Start. `/health` returns 200 with `status: degraded` and a
+per-dependency breakdown; `/query` returns 503 until the gap is closed.
+
+**Why.** A process that exits during startup leaves its reason in a log nobody
+is reading yet; a running `/health` endpoint answers "what is missing" directly.
+The breakdown is per dependency on purpose — a monitor needs to know *which*
+one is down, not merely that something is.
+
+**A bug this found.** `.env.example` ships `ANTHROPIC_API_KEY=` with no value,
+and pydantic read that as `SecretStr("")` — not `None`. `/health` therefore
+reported `api_key_configured: true` with no key present, and the failure would
+have surfaced as an authentication error on a user's first real query. Settings
+now treats a blank or whitespace key as absent, with tests covering both.

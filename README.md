@@ -4,11 +4,11 @@ Question answering over public **RBI Master Directions**, returning answers with
 verifiable citations — circular number, page, and source URL — backed by a
 reproducible evaluation suite and an ablation study.
 
-> **Status: Phase 2 of 7 (indexing and retrieval).** Ingestion, embedding,
-> and dense/keyword/hybrid retrieval with optional reranking all work.
-> Nothing is generated or evaluated yet, so there are no quality results to
-> report. Every number in this README will come from a script in this
-> repository; none are written by hand.
+> **Status: Phase 3 of 7 (generation API).** The full path works: ingest,
+> index, retrieve, answer with validated citations, and abstain when the
+> evidence does not support an answer. Nothing is evaluated yet, so there
+> are no quality results to report. Every number in this README will come
+> from a script in this repository; none are written by hand.
 
 **Live demo:** TODO (Phase 6)
 
@@ -99,7 +99,7 @@ uv sync --extra ml
 | `uv run poe index build` | embed a chunk set and index it | now |
 | `uv run poe index sets` | list chunk sets in the database | now |
 | `uv run poe query "..."` | print ranked chunks with scores | now |
-| `uv run poe serve` | run the API | Phase 3 |
+| `uv run poe serve` | run the API | now |
 | `uv run poe eval` | reproduce the results tables | Phase 4 |
 
 Tasks whose phase has not landed exit with status 2 and say so.
@@ -161,6 +161,29 @@ is about 130 MB rather than 2.5 GB. The ONNX backend is checked against
 sentence-transformers by `uv run poe test-parity`; see DECISIONS.md entry 0014
 for the measured agreement.
 
+## Answering
+
+```powershell
+Copy-Item .env.example .env   # then set ANTHROPIC_API_KEY
+uv run poe serve
+```
+
+```powershell
+curl.exe -s -X POST http://127.0.0.1:8000/query `
+  -H "Content-Type: application/json" `
+  -d '{\"question\":\"what is the minimum capital adequacy ratio\"}'
+```
+
+The response carries the answer, its citations, the chunk ids that were
+retrieved, latency, token usage and `cost_usd`. `GET /health` reports each
+dependency separately, so a missing key or an unreachable database says so
+rather than surfacing later as a failed query.
+
+**Two things the system will not do.** It will not return a citation whose
+quote does not appear verbatim in the chunk it names — the answer is withheld
+instead. And it will not answer from anything but the retrieved excerpts: when
+they do not support an answer it abstains. See DECISIONS.md entries 0020-0021.
+
 ## Tests
 
 ```powershell
@@ -196,6 +219,15 @@ already:
   happens silently inside `sentence-transformers`. The Phase 4 ablation must
   report this next to any 1024-token result rather than presenting it as a
   clean chunk-size comparison.
+- **Abstention has no tuned threshold yet.** The retrieval gate ships
+  disabled, because a threshold chosen before Phase 4 supplies labelled
+  unanswerable questions would be a number nobody measured. Abstention
+  currently rests on the model's own judgement plus citation validation.
+- **`ANTHROPIC_EFFORT` is untuned.** It defaults to `medium`; Phase 4
+  should sweep it rather than leaving it to taste.
+- **`cost_usd` comes from a price table dated in the code.** It is exact
+  arithmetic over published rates, not a measurement of your bill, and it
+  is `None` for any model not in the table rather than a guess.
 - **Section detection falls back to a heuristic.** `section_aware` chunking
   prefers the PDF outline, but many RBI PDFs carry no bookmarks, in which case
   headings are detected by pattern matching.
