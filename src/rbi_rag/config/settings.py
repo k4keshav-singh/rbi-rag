@@ -77,7 +77,7 @@ class Settings(BaseSettings):
         description="Minimum seconds between requests to rbi.org.in. Floor is deliberate.",
     )
     download_max_retries: int = Field(default=5, ge=0)
-    user_agent: str = "rbi-rag/0.1"
+    user_agent: str = "rbi-rag/0.1 (+https://github.com/k4keshav-singh/rbi-rag)"
     listing_url: str = "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx"
 
     # --- Chunking (the ablation sweeps these; these are the defaults) ---

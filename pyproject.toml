@@ -3,6 +3,8 @@ name = "rbi-rag"
 version = "0.1.0"
 description = "Question answering over RBI Master Directions with verifiable citations."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic>=0.39",

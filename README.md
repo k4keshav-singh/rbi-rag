@@ -218,4 +218,6 @@ Conventions are in [CLAUDE.md](CLAUDE.md).
 
 ## License
 
-TODO
+[MIT](LICENSE). The RBI Master Directions themselves are public
+documents published by the Reserve Bank of India and are not covered by this
+licence; none are redistributed here.
