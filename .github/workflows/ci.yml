@@ -13,11 +13,15 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        # Pinned to an exact patch, not @v10: setup-uv stopped publishing
+        # floating major tags at v8, so @v10 does not resolve.
+        uses: astral-sh/setup-uv@v10.3.3
         with:
+          # Explicitly true, not the `auto` default, which v10 turns off for
+          # events it considers cache-poisoning risks.
           enable-cache: true
 
       - name: Install Python and dependencies
@@ -64,11 +68,15 @@ jobs:
       POSTGRES_PASSWORD: rbi
       POSTGRES_DB: rbi_rag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        # Pinned to an exact patch, not @v10: setup-uv stopped publishing
+        # floating major tags at v8, so @v10 does not resolve.
+        uses: astral-sh/setup-uv@v10.3.3
         with:
+          # Explicitly true, not the `auto` default, which v10 turns off for
+          # events it considers cache-poisoning risks.
           enable-cache: true
 
       - name: Install Python and dependencies
