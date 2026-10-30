@@ -115,7 +115,7 @@ help = "Run the FastAPI application"
 cmd = "python -m rbi_rag.api"
 
 [tool.poe.tasks.eval]
-help = "Run the evaluation suite and write results/ (Phase 4)"
+help = "Run the evaluation suite and write results/"
 cmd = "python -m rbi_rag.eval"
 
 
