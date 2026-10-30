@@ -7,11 +7,12 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from rbi_rag.api.deps import (
     AppState,
@@ -28,6 +29,28 @@ from rbi_rag.retrieve.rerank import Reranker
 from rbi_rag.schemas import QueryRequest, QueryResponse, RetrievalConfig
 
 logger = logging.getLogger(__name__)
+
+#: The single-page frontend, read once at import rather than per request.
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def read_index_html() -> str:
+    """The frontend page, or a plain message if it is missing.
+
+    A missing page must not take the API down with it: /query is the part
+    that matters, and a 500 on / would make a packaging slip look like a
+    total outage.
+    """
+    path = STATIC_DIR / "index.html"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("frontend page missing", extra={"path": str(path)})
+        return (
+            "<!doctype html><title>rbi-rag</title>"
+            "<p>The frontend page was not packaged with this build. "
+            "The API itself is available at <code>/docs</code>.</p>"
+        )
 
 
 def create_app(
@@ -99,6 +122,13 @@ def create_app(
             },
         )
         return response
+
+    index_html = read_index_html()
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index() -> HTMLResponse:
+        """The single-page frontend."""
+        return HTMLResponse(index_html)
 
     @app.get("/health")
     def health() -> JSONResponse:

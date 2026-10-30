@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RBI Master Directions</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #5c6670; --line: #e3e6e8;
+    --accent: #0b5fff; --panel: #f7f8f9; --warn-bg: #fff8e6; --warn-line: #e0b650;
+    --quote: #45515c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c; --fg: #e8eaed; --muted: #9aa5b1; --line: #2c3238;
+      --accent: #6ea0ff; --panel: #1c2026; --warn-bg: #2b2415; --warn-line: #8a6d28;
+      --quote: #b9c2cb;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 28px; }
+  form { display: flex; flex-direction: column; gap: 12px; }
+  textarea {
+    width: 100%; min-height: 76px; padding: 12px; resize: vertical;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px; font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  select, button {
+    font: inherit; padding: 9px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  button {
+    background: var(--accent); color: #fff; border-color: transparent;
+    cursor: pointer; font-weight: 600;
+  }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  label.check { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  #result { margin-top: 32px; }
+  .answer {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px 20px; white-space: pre-wrap;
+  }
+  /* Abstention is a distinct state, not an empty answer. */
+  .answer.abstained { background: var(--warn-bg); border-color: var(--warn-line); }
+  .badge {
+    display: inline-block; font-size: 0.72rem; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 99px;
+    padding: 2px 10px; margin-bottom: 10px;
+  }
+  h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em;
+       color: var(--muted); margin: 28px 0 10px; }
+  ol.citations { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  ol.citations li {
+    border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 12px 14px;
+  }
+  .cite-head { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+  .cite-head a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .cite-head a:hover { text-decoration: underline; }
+  .pages { color: var(--muted); font-size: 0.86rem; }
+  blockquote {
+    margin: 8px 0 0; padding-left: 12px; border-left: 2px solid var(--line);
+    color: var(--quote); font-size: 0.94rem;
+  }
+  .meta {
+    margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line);
+    display: flex; gap: 18px; flex-wrap: wrap;
+    color: var(--muted); font-size: 0.84rem;
+  }
+  .meta b { color: var(--fg); font-weight: 600; }
+  .error { color: #c0392b; }
+  @media (prefers-color-scheme: dark) { .error { color: #ff8b7a; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>RBI Master Directions</h1>
+  <p class="sub">
+    Answers are drawn only from retrieved circulars. Every claim carries a
+    citation you can open and check. When the circulars do not support an
+    answer, the system says so rather than guessing.
+  </p>
+
+  <form id="ask">
+    <textarea id="question" placeholder="e.g. what is the minimum capital adequacy ratio for commercial banks?"
+              aria-label="Question"></textarea>
+    <div class="controls">
+      <select id="retriever" aria-label="Retriever">
+        <option value="">default retriever</option>
+        <option value="hybrid">hybrid</option>
+        <option value="dense">dense</option>
+        <option value="fts">keyword (FTS)</option>
+      </select>
+      <label class="check"><input type="checkbox" id="rerank"> rerank</label>
+      <button type="submit" id="submit">Ask</button>
+    </div>
+  </form>
+
+  <div id="result" aria-live="polite"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+function pageLabel(c) {
+  return c.page_start === c.page_end
+    ? `page ${c.page_start}`
+    : `pages ${c.page_start}–${c.page_end}`;
+}
+
+function renderCitation(c) {
+  // Deep-link straight to the page of the source PDF.
+  const href = `${c.url}#page=${c.page_start}`;
+  const label = c.circular_number || c.chunk_id;
+  return `<li>
+    <div class="cite-head">
+      <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>
+      <span class="pages">${esc(pageLabel(c))}</span>
+    </div>
+    ${c.quote ? `<blockquote>${esc(c.quote)}</blockquote>` : ""}
+  </li>`;
+}
+
+function money(v) {
+  if (v === null || v === undefined) return "not priced";
+  return `$${v < 0.01 ? v.toFixed(6) : v.toFixed(4)}`;
+}
+
+function render(data) {
+  const cites = data.citations || [];
+  const badge = data.abstained ? "insufficient evidence" : "answer";
+  $("result").innerHTML = `
+    <span class="badge">${badge}</span>
+    <div class="answer${data.abstained ? " abstained" : ""}">${esc(data.answer)}</div>
+    ${cites.length ? `<h2>Citations</h2><ol class="citations">${cites.map(renderCitation).join("")}</ol>` : ""}
+    <div class="meta">
+      <span><b>${data.latency_ms.toFixed(0)}</b> ms</span>
+      <span><b>${money(data.cost_usd)}</b></span>
+      <span>retriever <b>${esc(data.retriever)}</b></span>
+      <span>model <b>${esc(data.model)}</b></span>
+      <span><b>${(data.retrieved_chunk_ids || []).length}</b> chunks retrieved</span>
+    </div>`;
+}
+
+$("ask").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = $("question").value.trim();
+  if (!question) return;
+
+  const body = { question };
+  if ($("retriever").value) body.retriever = $("retriever").value;
+  if ($("rerank").checked) body.rerank = true;
+
+  $("submit").disabled = true;
+  $("result").innerHTML = `<p class="sub">Retrieving and answering…</p>`;
+  try {
+    const response = await fetch("/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      $("result").innerHTML =
+        `<p class="error">${esc(data.detail || response.statusText)}</p>`;
+    } else {
+      render(data);
+    }
+  } catch (err) {
+    $("result").innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  } finally {
+    $("submit").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
