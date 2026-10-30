@@ -85,9 +85,19 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=512, ge=1)
     chunk_overlap_ratio: float = Field(default=0.15, ge=0.0, lt=1.0)
 
+    # --- Evaluation ---
+    judge_model: str | None = Field(
+        default=None,
+        description="Model for the faithfulness judge. Falls back to ANTHROPIC_MODEL.",
+    )
+    eval_k_values: tuple[int, ...] = (1, 3, 5, 10)
+    ablation_chunk_sizes: tuple[int, ...] = (256, 512, 1024)
+    eval_cache_enabled: bool = True
+
     # --- Paths ---
     data_dir: Path = Path("data")
     results_dir: Path = Path("results")
+    eval_dir: Path = Path("eval")
 
     # --- Retrieval defaults (overridable per request and per ablation run) ---
     retriever: RetrieverName = "hybrid"
@@ -156,6 +166,16 @@ class Settings(BaseSettings):
     def manifest_path(self) -> Path:
         """The ingest manifest, one JSONL row per Master Direction."""
         return self._absolute(self.data_dir) / "manifest.jsonl"
+
+    @property
+    def eval_set_path(self) -> Path:
+        """The evaluation set. Only verified items feed reported metrics."""
+        return self._absolute(self.eval_dir) / "questions.jsonl"
+
+    @property
+    def eval_cache_dir(self) -> Path:
+        """Cached LLM responses, so a re-run of an unchanged arm is free."""
+        return self._absolute(self.data_dir) / "eval_cache"
 
     @property
     def results_path(self) -> Path:

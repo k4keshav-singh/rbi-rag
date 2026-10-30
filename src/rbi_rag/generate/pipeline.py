@@ -39,6 +39,8 @@ class AnswerOutcome:
     model: str = ""
     abstain_reason: str | None = None
     llm_calls: int = 0
+    claimed_citations: int = 0
+    valid_citations: int = 0
 
     @property
     def retrieved_chunk_ids(self) -> list[str]:
@@ -132,6 +134,8 @@ def answer_question(
                 cost_usd=cost_usd(model, usage),
                 model=model,
                 llm_calls=calls,
+                claimed_citations=len(payload.citations),
+                valid_citations=len(validation.citations),
             )
 
         last_violations = list(validation.violations)

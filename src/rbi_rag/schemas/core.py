@@ -230,3 +230,56 @@ class QueryResponse(BaseModel):
     )
     model: str
     retriever: RetrieverName
+
+
+class GoldSpan(BaseModel):
+    """Where the evidence for an answer actually lives, in the source document.
+
+    Deliberately NOT a chunk id. Chunk ids encode the chunking configuration
+    (`{doc_id}-{strategy}-{size}-{index}-{hash}`), so a gold set keyed on them
+    is valid for exactly one arm of the ablation and empty for every other --
+    measured: zero id overlap between any two chunk configurations. Labelling
+    by document, page range and quote is chunk-set independent, so one label
+    serves every arm. See DECISIONS.md entry 0026.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    doc_id: str
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+    quote: str | None = Field(
+        default=None,
+        description="Verbatim text that must appear in a chunk for it to count.",
+    )
+
+    def covers_pages(self, page_start: int, page_end: int) -> bool:
+        """True when the given page range overlaps this span at all."""
+        return page_start <= self.page_end and page_end >= self.page_start
+
+
+class EvalItem(BaseModel):
+    """One evaluation question.
+
+    `verified_by_human` is false for anything a script produced and may only be
+    set by the repository owner through the review CLI. Every reported metric
+    filters on it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    question: str = Field(min_length=1)
+    question_type: QuestionType
+    gold_spans: list[GoldSpan] = Field(default_factory=list)
+    gold_answer_notes: str = ""
+    verified_by_human: bool = False
+    drafted_by: str | None = Field(
+        default=None, description="Model that proposed this item, or None if hand-written."
+    )
+    drafted_at: datetime | None = None
+    source_doc_id: str | None = None
+
+    @property
+    def is_answerable(self) -> bool:
+        return self.question_type != "unanswerable"
