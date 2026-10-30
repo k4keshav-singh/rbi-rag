@@ -66,6 +66,10 @@ sequence = [
     { cmd = "ruff format src tests" },
 ]
 
+[tool.poe.tasks.docs]
+help = "Regenerate the generated parts of README and DECISIONS"
+cmd = "python -m rbi_rag.docgen"
+
 [tool.poe.tasks.test]
 help = "Run unit tests (no database, no network)"
 cmd = "pytest"
