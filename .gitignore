@@ -29,6 +29,16 @@ htmlcov/
 .cache/
 models/
 
+# Terraform: the provider cache is hundreds of MB, and state and tfvars
+# hold secrets (the generated database password lives in state).
+.terraform/
+.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
+
 # OS / editor
 .DS_Store
 Thumbs.db

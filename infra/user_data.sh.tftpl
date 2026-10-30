@@ -1,0 +1,68 @@
+#!/bin/bash
+# Boot script for the API instance.
+#
+# Secrets are fetched from SSM at boot by the instance role and written to a
+# root-owned env file. They are never baked into the image, passed on the
+# docker command line (where `ps` would show them), or held in Terraform state.
+set -euo pipefail
+
+dnf update -y
+dnf install -y docker
+systemctl enable --now docker
+
+ENV_FILE=/etc/rbi-rag.env
+install -m 600 -o root -g root /dev/null "$ENV_FILE"
+
+DB_PASSWORD="$(aws ssm get-parameter \
+  --name '${db_password_arn}' --with-decryption \
+  --region '${region}' --query 'Parameter.Value' --output text)"
+
+ANTHROPIC_API_KEY="$(aws ssm get-parameter \
+  --name '${api_key_arn}' --with-decryption \
+  --region '${region}' --query 'Parameter.Value' --output text)"
+
+cat > "$ENV_FILE" <<EOF
+POSTGRES_HOST=${db_host}
+POSTGRES_PORT=${db_port}
+POSTGRES_DB=${db_name}
+POSTGRES_USER=${db_user}
+POSTGRES_PASSWORD=$DB_PASSWORD
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+ANTHROPIC_MODEL=${anthropic_model}
+RERANK_ENABLED=${enable_rerank}
+LOG_LEVEL=INFO
+EOF
+
+# ECR login, if the image lives there.
+REGISTRY="$(echo '${image}' | cut -d/ -f1)"
+if [[ "$REGISTRY" == *".dkr.ecr."* ]]; then
+  aws ecr get-login-password --region '${region}' \
+    | docker login --username AWS --password-stdin "$REGISTRY"
+fi
+
+docker pull '${image}'
+
+# Port 80 on the host, 8000 in the container: no reverse proxy, because a
+# demo behind a CIDR allowlist does not need one. Putting TLS in front of this
+# means an ALB or CloudFront, which the deployment plan prices separately.
+docker rm -f rbi-rag 2>/dev/null || true
+docker run -d \
+  --name rbi-rag \
+  --restart unless-stopped \
+  --env-file "$ENV_FILE" \
+  -p 80:8000 \
+  --log-driver json-file \
+  --log-opt max-size=10m \
+  --log-opt max-file=3 \
+  '${image}'
+
+# Apply migrations once the database is reachable. Idempotent, so a reboot
+# re-running this script is harmless.
+for attempt in $(seq 1 30); do
+  if docker run --rm --env-file "$ENV_FILE" '${image}' \
+      python -m rbi_rag.index migrate; then
+    break
+  fi
+  echo "database not ready yet (attempt $attempt); retrying in 10s"
+  sleep 10
+done
