@@ -11,15 +11,18 @@ uv run poe eval              # retrieval, then generation, then write results
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from rbi_rag.config import Settings, get_settings
-from rbi_rag.eval import ablation, dataset, report, runner
+from rbi_rag.eval import ablation, dataset, gate, report, runner
+from rbi_rag.eval import snapshot as snap
 from rbi_rag.eval.cache import ResponseCache
 from rbi_rag.eval.calibration import calibrate
 from rbi_rag.eval.review import review_items
+from rbi_rag.index.migrate import migrate
 from rbi_rag.index.store import PostgresChunkStore, connect
 from rbi_rag.schemas import Chunk, ChunkStrategy, EvalItem
 
@@ -41,6 +44,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="summarise the eval set")
     sub.add_parser("review", help="verify drafted candidates yourself")
     sub.add_parser("calibrate", help="compare judge labels with your own")
+    sub.add_parser("gate", help="fail if retrieval regressed against the baseline")
+
+    snapshot_cmd = sub.add_parser("snapshot", help="rebuild the committed CI snapshot")
+    snapshot_cmd.add_argument("--chunk-set", type=int, help="chunk set to snapshot")
+    snapshot_cmd.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="re-record baseline.json from the existing snapshot",
+    )
 
     draft_cmd = sub.add_parser("draft", help="propose candidate questions")
     draft_cmd.add_argument("--chunk-set", type=int, required=True)
@@ -274,6 +286,139 @@ def _chunks_by_doc(connection: object) -> dict[str, list[Chunk]]:
     return grouped
 
 
+# -- snapshot and gate -------------------------------------------------------
+
+
+def cmd_gate(settings: Settings) -> int:
+    """Fail when retrieval has regressed against the committed baseline."""
+    try:
+        loaded = snap.load_snapshot(
+            settings.snapshot_dir,
+            expected_model=settings.embedding_model,
+            expected_dim=settings.embedding_dim,
+        )
+    except snap.SnapshotError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
+    if not loaded.baseline:
+        sys.stderr.write(
+            "the snapshot has no baseline. Record one with "
+            "`uv run poe eval snapshot --baseline-only`.\n"
+        )
+        return 2
+
+    print(
+        f"gate: {len(loaded.chunks)} chunk(s), {len(loaded.questions)} question(s), "
+        f"embeddings from {loaded.manifest.embedding_model}"
+    )
+    print("this gate detects change on a fixture corpus; it is not a quality measure.\n")
+
+    with connect(settings.postgres_dsn) as connection:
+        migrate(connection, embedding_dim=settings.embedding_dim)
+        measured = runner.measure_snapshot(settings, connection, loaded)
+
+    outcome = gate.compare(
+        loaded.baseline,
+        measured,
+        metrics=settings.eval_gate_metrics,
+        max_drop=settings.eval_gate_max_drop,
+    )
+    print(outcome.describe())
+    return 0 if outcome.passed else 1
+
+
+def cmd_snapshot(settings: Settings, chunk_set_id: int | None, baseline_only: bool) -> int:
+    """Rebuild the committed snapshot, or just re-record its baseline."""
+    questions_path = settings.snapshot_dir / snap.QUESTIONS
+    if not questions_path.exists():
+        sys.stderr.write(
+            f"write the gate's fixture questions to {questions_path} first.\n"
+            "They are a canary over a fixture corpus, not the evaluation set, so "
+            "they do not need human verification.\n"
+        )
+        return 2
+
+    with connect(settings.postgres_dsn) as connection:
+        migrate(connection, embedding_dim=settings.embedding_dim)
+
+        if not baseline_only:
+            if chunk_set_id is None:
+                sys.stderr.write("--chunk-set is required unless --baseline-only is given\n")
+                return 2
+            built = _build_snapshot(settings, connection, chunk_set_id, questions_path)
+            if built != 0:
+                return built
+
+        loaded = snap.load_snapshot(settings.snapshot_dir)
+        measured = runner.measure_snapshot(settings, connection, loaded)
+
+    baseline = gate.baseline_from(measured)
+    (settings.snapshot_dir / snap.BASELINE).write_text(
+        json.dumps(baseline, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    print(f"recorded a baseline for {len(baseline)} arm(s) in {settings.snapshot_dir}")
+    for arm, metrics in sorted(baseline.items()):
+        shown = "  ".join(
+            f"{name}={report.format_value(metrics.get(name))}"
+            for name in settings.eval_gate_metrics
+        )
+        print(f"  {arm}: {shown}")
+    return 0
+
+
+def _build_snapshot(
+    settings: Settings, connection: object, chunk_set_id: int, questions_path: Path
+) -> int:
+    """Pull chunks, vectors and query vectors together into the snapshot."""
+    import numpy as np
+
+    from rbi_rag.index.factory import build_embedder
+
+    store = PostgresChunkStore(connection)
+    chunks, embeddings = store.fetch_with_embeddings(chunk_set_id)
+    if not chunks:
+        sys.stderr.write(f"chunk set {chunk_set_id} has no embedded chunks\n")
+        return 2
+
+    questions = [
+        EvalItem.model_validate_json(line)
+        for line in questions_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not questions:
+        sys.stderr.write(f"{questions_path} has no questions\n")
+        return 2
+
+    # Embedded once, here, with the real model; CI replays the result.
+    embedder = build_embedder(settings, for_queries=True)
+    query_vectors = np.vstack([embedder.embed_query(item.question) for item in questions])
+
+    strategy, target_tokens = runner.chunk_set_config(connection, chunk_set_id)
+    snap.write_snapshot(
+        settings.snapshot_dir,
+        manifest=snap.SnapshotManifest(
+            embedding_model=settings.embedding_model,
+            embedding_dim=settings.embedding_dim,
+            strategy=strategy,
+            target_tokens=target_tokens,
+            chunk_count=len(chunks),
+            question_count=len(questions),
+            created=snap.now_iso(),
+            git_sha=report.git_sha(),
+        ),
+        chunks=chunks,
+        embeddings=embeddings,
+        questions=questions,
+        query_vectors=query_vectors,
+        baseline={},
+    )
+    print(
+        f"wrote {len(chunks)} chunk(s) and {len(questions)} question(s) to {settings.snapshot_dir}"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
@@ -285,6 +430,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if command == "review":
         return cmd_review(settings)
+
+    if command == "gate":
+        return cmd_gate(settings)
+
+    if command == "snapshot":
+        return cmd_snapshot(settings, getattr(args, "chunk_set", None), args.baseline_only)
 
     if command == "draft":
         sys.stderr.write(
@@ -319,10 +470,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_tables(settings, verified, retrieval_results, generation_results, cache)
     print(cache.describe())
     return 0
-
-
-def results_dir(settings: Settings) -> Path:
-    return settings.results_path
 
 
 if __name__ == "__main__":
