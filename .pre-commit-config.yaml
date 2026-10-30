@@ -14,17 +14,21 @@ repos:
         args: ["--maxkb=2048"]
       - id: detect-private-key
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  # Local hook so mypy resolves imports against the project environment
-  # rather than an isolated pre-commit venv.
+  # Local hooks so every tool is the version pinned in pyproject.toml. A
+  # ruff-pre-commit rev drifts from the project's own ruff, and the two then
+  # reformat each other's output on every commit.
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff (format)
+        entry: uv run ruff format
+        language: system
+        types: [python]
       - id: mypy
         name: mypy (strict, src only)
         entry: uv run mypy src
