@@ -197,6 +197,34 @@ class PostgresChunkStore:
         self._connection.commit()
         return name
 
+    def fetch_with_embeddings(self, chunk_set_id: int) -> tuple[list[Chunk], FloatArray]:
+        """Read a chunk set back out, vectors included.
+
+        Used to build the committed CI snapshot, so that the gate runs against
+        the same vectors the real index holds rather than re-embedding and
+        hoping the result matches.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_CHUNK_COLUMNS}, c.embedding
+                FROM chunks c
+                JOIN chunk_sets s USING (chunk_set_id)
+                WHERE c.chunk_set_id = %s AND c.embedding IS NOT NULL
+                ORDER BY c.chunk_id
+                """,
+                (chunk_set_id,),
+            )
+            rows = cursor.fetchall()
+
+        chunks = [_row_to_scored((*row[:11], 0.0)).chunk for row in rows]
+        vectors = (
+            np.vstack([_as_vector(row[11]) for row in rows])
+            if rows
+            else np.zeros((0, 0), dtype=np.float32)
+        )
+        return chunks, vectors
+
     def count_chunks(self, chunk_set_id: int) -> int:
         with self._connection.cursor() as cursor:
             cursor.execute("SELECT count(*) FROM chunks WHERE chunk_set_id = %s", (chunk_set_id,))
@@ -279,6 +307,19 @@ class PostgresChunkStore:
                 (query, chunk_set_id, limit),
             )
             return [_row_to_scored(row) for row in cursor.fetchall()]
+
+
+def _as_vector(value: Any) -> FloatArray:
+    """Normalise whatever pgvector hands back into a float32 array.
+
+    register_vector may yield a pgvector Vector rather than a numpy array
+    depending on the adapter version, and np.asarray cannot coerce it.
+    """
+    for attribute in ("to_numpy", "to_list"):
+        converter = getattr(value, attribute, None)
+        if callable(converter):
+            return np.asarray(converter(), dtype=np.float32)
+    return np.asarray(value, dtype=np.float32)
 
 
 def _row_to_scored(row: Sequence[Any]) -> ScoredChunk:

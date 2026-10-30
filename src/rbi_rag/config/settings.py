@@ -91,6 +91,16 @@ class Settings(BaseSettings):
         description="Model for the faithfulness judge. Falls back to ANTHROPIC_MODEL.",
     )
     eval_k_values: tuple[int, ...] = (1, 3, 5, 10)
+    # The CI gate blocks a merge when any of these drops by more than
+    # eval_gate_max_drop. It measures change on a fixture corpus, not quality.
+    #
+    # recall@5 alone is not enough: when the snapshot holds fewer chunks than
+    # k, every chunk is retrieved whatever the ranking, and recall@k cannot
+    # move. Measured on the fixture corpus, inverting the dense retriever left
+    # recall@5 at 1.0000 while MRR fell from 1.0 to 0.25. Order-sensitive
+    # metrics are what make the gate bite. See DECISIONS.md entry 0033.
+    eval_gate_metrics: tuple[str, ...] = ("recall@1", "recall@5", "mrr")
+    eval_gate_max_drop: float = Field(default=0.05, ge=0.0, le=1.0)
     ablation_chunk_sizes: tuple[int, ...] = (256, 512, 1024)
     eval_cache_enabled: bool = True
 
@@ -171,6 +181,11 @@ class Settings(BaseSettings):
     def eval_set_path(self) -> Path:
         """The evaluation set. Only verified items feed reported metrics."""
         return self._absolute(self.eval_dir) / "questions.jsonl"
+
+    @property
+    def snapshot_dir(self) -> Path:
+        """The committed index snapshot the CI gate runs against."""
+        return self._absolute(self.eval_dir) / "snapshot"
 
     @property
     def eval_cache_dir(self) -> Path:
