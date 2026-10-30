@@ -28,7 +28,7 @@ Do not begin the next phase until asked.
 | 1 | Ingestion | done |
 | 2 | Indexing and retrieval | done |
 | 3 | Generation API | done |
-| 4 | Evaluation | not started |
+| 4 | Evaluation | done |
 | 5 | CI eval gate | not started |
 | 6 | Frontend and AWS | not started |
 | 7 | Documentation | not started |
@@ -135,9 +135,12 @@ uv run poe index sets       # list chunk sets
 uv run poe query "..."      # ranked chunks, with per-retriever provenance
 ```
 
-Unimplemented tasks (`eval`) exit with status 2 and name the phase they
-belong to. Make them work when that phase arrives; never make them
-*appear* to work.
+```powershell
+uv run poe eval status      # eval set summary
+uv run poe eval review      # verify candidates (only the owner may)
+uv run poe eval retrieval   # full 36-arm sweep, no LLM
+uv run poe eval             # retrieval, then generation on a subset
+```
 
 ## Measurement rules that bind later phases
 
@@ -155,6 +158,14 @@ belong to. Make them work when that phase arrives; never make them
   unpriced model reports `None`.
 - A citation whose quote is not verbatim in its chunk is a failure, not a
   near miss. The pipeline abstains rather than stripping bad citations.
+- Gold evidence is labelled as spans (doc, pages, quote), never as chunk
+  ids: ids do not survive a re-chunk, so a chunk-id gold set is valid for
+  one ablation arm and empty for the rest.
+- Recall counts gold spans covered, not chunks retrieved. Chunk counting
+  favours large chunks for reasons unrelated to retrieval quality.
+- Faithfulness is never reported without its judge calibration beside it.
+- The in-memory store and Postgres must agree on matching semantics. They
+  once did not (OR vs AND) and unit tests passed on a broken retriever.
 
 ## Working with RBI's website
 

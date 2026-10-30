@@ -4,11 +4,12 @@ Question answering over public **RBI Master Directions**, returning answers with
 verifiable citations — circular number, page, and source URL — backed by a
 reproducible evaluation suite and an ablation study.
 
-> **Status: Phase 3 of 7 (generation API).** The full path works: ingest,
-> index, retrieve, answer with validated citations, and abstain when the
-> evidence does not support an answer. Nothing is evaluated yet, so there
-> are no quality results to report. Every number in this README will come
-> from a script in this repository; none are written by hand.
+> **Status: Phase 4 of 7 (evaluation).** The full path works and the
+> evaluation suite is built: retrieval metrics, generation metrics, an
+> LLM judge with calibration, and a 36-arm ablation. **There are no
+> results yet**, because results need a downloaded corpus and a
+> human-verified eval set. Every number in this README will come from a
+> script in this repository; none are written by hand.
 
 **Live demo:** TODO (Phase 6)
 
@@ -100,7 +101,10 @@ uv sync --extra ml
 | `uv run poe index sets` | list chunk sets in the database | now |
 | `uv run poe query "..."` | print ranked chunks with scores | now |
 | `uv run poe serve` | run the API | now |
-| `uv run poe eval` | reproduce the results tables | Phase 4 |
+| `uv run poe eval status` | what the eval set contains | now |
+| `uv run poe eval review` | verify candidate questions yourself | now |
+| `uv run poe eval retrieval` | sweep all 36 arms, no LLM, free | now |
+| `uv run poe eval` | retrieval, then generation, then results tables | now |
 
 Tasks whose phase has not landed exit with status 2 and say so.
 
@@ -195,6 +199,28 @@ uv run poe test-parity       # needs `uv sync --extra ml` (installs torch)
 
 Only the first runs in CI.
 
+## Evaluation
+
+```powershell
+uv run poe eval status       # what the eval set contains
+uv run poe eval review       # verify candidates - only you can do this
+uv run poe eval retrieval    # all 36 arms, no LLM, free
+uv run poe eval              # retrieval, then generation on a subset
+```
+
+**Reported metrics use human-verified items only.** A drafting script proposes
+candidate questions and always writes `verified_by_human=false`; nothing
+automated can flip that flag. With no verified items the suite refuses to
+report anything rather than scoring the system against questions it wrote
+itself.
+
+Gold evidence is labelled as **spans** — document, page range, quote — not as
+chunk ids. Chunk ids encode their chunking configuration and share nothing
+across configurations (measured: zero overlap between any two), so a chunk-id
+gold set would be valid for one arm of the ablation and empty for the other
+five. Recall counts spans found rather than chunks retrieved, so large chunks
+do not score better merely by being fewer. See DECISIONS.md entries 0026-0027.
+
 ## Repository layout
 
 See [CLAUDE.md](CLAUDE.md) for the full map and the conventions this project
@@ -219,6 +245,14 @@ already:
   happens silently inside `sentence-transformers`. The Phase 4 ablation must
   report this next to any 1024-token result rather than presenting it as a
   clean chunk-size comparison.
+- **There are no measured results.** The ablation runs, but it needs a real
+  corpus and a verified eval set to produce anything worth reporting. The
+  Results section stays empty until then.
+- **Generation metrics are not deterministic.** Responses are cached by
+  content hash so a re-run replays them; clearing the cache re-samples the
+  model. Retrieval metrics reproduce exactly.
+- **Faithfulness depends on an LLM judge.** It is reported next to Cohen's
+  kappa against hand labels, and reads `TODO` until that subset is labelled.
 - **Abstention has no tuned threshold yet.** The retrieval gate ships
   disabled, because a threshold chosen before Phase 4 supplies labelled
   unanswerable questions would be a number nobody measured. Abstention

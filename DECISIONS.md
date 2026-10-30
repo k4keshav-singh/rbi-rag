@@ -649,3 +649,191 @@ and pydantic read that as `SecretStr("")` — not `None`. `/health` therefore
 reported `api_key_configured: true` with no key present, and the failure would
 have surfaced as an authentication error on a user's first real query. Settings
 now treats a blank or whitespace key as absent, with tests covering both.
+
+---
+
+## 0026 — Gold evidence is labelled as spans, not as chunk ids
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** The brief specifies `gold_chunk_ids` on each eval item. A chunk id
+encodes its chunking configuration (`{doc_id}-{strategy}-{size}-{index}-{hash}`),
+and the ablation compares six configurations.
+
+**Measured.** Chunking one fixture document four ways and intersecting the id
+sets:
+
+```
+('fixed_tokens', 20) vs ('fixed_tokens', 40):   0 shared
+('fixed_tokens', 20) vs ('section_aware', 20):  0 shared
+('section_aware', 20) vs ('section_aware', 40): 0 shared
+          ... every pair: 0 shared
+```
+
+**Options.** Label gold chunk ids per configuration (six times the work, and
+six incomparable gold sets); label once against one configuration and accept
+that five arms are unmeasurable; or label at a level the chunker cannot move.
+
+**Choice.** `GoldSpan(doc_id, page_start, page_end, quote)`. A chunk covers a
+span when it is from that document, its page range overlaps, and — where a
+quote is given — it contains that quote.
+
+**Why.** Following the brief literally would have produced a gold set valid for
+exactly one arm of the grid and empty for the other five, so the headline
+comparison of the whole project could not have been computed. Document, page
+and quote are properties of the source PDF, so one label serves every arm, and
+re-chunking never invalidates the eval set.
+
+The quote matters as much as the pages: page overlap alone is generous on a
+dense page, and a 1024-token chunk would otherwise "cover" a span it merely
+sits near. `resolve_gold_chunk_ids` still derives the ids for a given chunk set,
+so a result stays inspectable — but as output, never as a label.
+
+---
+
+## 0027 — Retrieval metrics count spans found, not chunks retrieved
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** With gold spans in place, recall@k could still be computed the
+conventional way: relevant chunks retrieved divided by relevant chunks total.
+
+**Options.** Chunk-counting recall, or span-covering recall.
+
+**Choice.** Recall@k is the fraction of gold **spans** covered by at least one
+chunk in the top k. MRR uses the first chunk covering any span. nDCG awards
+gain only where a chunk is the *first* to cover a span.
+
+**Why.** The number of chunks covering a fixed piece of evidence falls as chunk
+size rises. Under chunk-counting recall, a 1024-token configuration needs to
+find two chunks where a 256-token one needs eight, so it scores higher for
+reasons that have nothing to do with retrieval quality — the exact confound
+that would make "bigger chunks are better" the headline finding. Counting spans
+asks the question that matters: was the evidence surfaced in the top k?
+
+The nDCG novelty rule closes the mirror-image loophole: without it, a
+configuration that splits one span across many small chunks is rewarded for
+returning the same evidence repeatedly. A test asserts both chunkings of the
+same document score identically, and a companion test shows the chunk counts
+genuinely differ — so the property is demonstrated, not asserted.
+
+---
+
+## 0028 — Full grid for retrieval, a derived subset for generation
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** The grid is 3 chunk sizes × 2 strategies × 3 retrievers × 2 rerank
+settings = 36 arms. Retrieval costs nothing. Generation costs an answer call
+and a judge call per item per arm.
+
+**Estimated** from the committed price table at `claude-sonnet-5-5`, assuming
+~5,500 input tokens per answer and 2.5× output for thinking:
+
+| Questions | Full grid | 6-arm subset |
+| --- | --- | --- |
+| 30 | ~$59 | ~$10 |
+| 50 | ~$99 | ~$17 |
+| 100 | ~$198 | ~$33 |
+
+**Choice.** Retrieval across all 36 arms; generation on a subset, chosen by the
+repository owner at six arms.
+
+**Why.** Generation quality is largely downstream of retrieval, so 36 arms of
+answering pays roughly six times over for what the retrieval table already
+shows. The subset is **derived from the retrieval results**, not hand-picked:
+the best arm on recall@5, the other retrievers at that chunk configuration, and
+the rerank toggle. That makes the choice reproducible and makes each included
+arm answer a question rather than sample the space. `--arms N` widens it.
+
+Those dollar figures are estimates with stated assumptions. The measured cost
+goes into `results/generation.md` from real usage.
+
+---
+
+## 0029 — Faithfulness is reported with its calibration, or as TODO
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** Faithfulness is scored by an LLM judge. Most answers in a working
+system are faithful, so a judge that always answered "faithful" would score
+around 90% raw agreement with a human and be worthless.
+
+**Options.** Report faithfulness alone; report it with raw agreement; report it
+with a chance-corrected statistic.
+
+**Choice.** Cohen's kappa against the owner's labels on a subset, printed next
+to the faithfulness score. With no human labels the report says
+`judge calibration: TODO` rather than printing an unqualified number.
+
+**Why.** Raw agreement is exactly the statistic a lazy judge games; kappa near
+zero exposes it, and a test pins that down — a judge that says "faithful" nine
+times out of ten against a human who disagrees once scores kappa 0.0. A
+constant labeller on either side is flagged as degenerate in the output,
+because kappa is not meaningful there and a reader should not take 1.0 at face
+value.
+
+The judge's prompt is scoped to support, not correctness: a claim true of
+Indian banking regulation but absent from the cited excerpts is unsupported.
+Otherwise the metric quietly becomes a test of the judge's own knowledge.
+
+---
+
+## 0030 — Generation results are cached, and are not deterministic
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** The Phase 4 done-criterion is that `uv run poe eval` reproduces
+the results tables from a clean run. An LLM is not deterministic.
+
+**Options.** Claim reproducibility and quietly not have it; pin a seed the API
+does not offer; or cache responses and state plainly what reproduces.
+
+**Choice.** Cache by content hash — model, prompt, retrieved context, answer —
+and say in the results header that retrieval tables reproduce exactly while
+generation tables replay from cache and re-sample when the cache is cleared.
+
+**Why.** The alternative is a reproducibility claim that fails the first time
+someone checks it. The cache key covers everything that could change a
+response, so a changed prompt or a different arm re-runs rather than serving a
+verdict about different text. `--no-cache` forces a fresh sample.
+
+---
+
+## 0031 — Postgres full-text search matches disjunctively
+
+**Date:** 2026-10-30 · **Phase:** 4
+
+**Context.** The FTS retriever used `websearch_to_tsquery`, which builds a
+**conjunctive** query. Running the ablation against the real database, every
+FTS arm scored 0.0 recall on a question whose answer was indexed:
+
+```
+tsquery: 'minimum' & 'capit' & 'ratio' & 'must' & 'bank' & 'maintain'
+per-chunk match: all False
+match on 'capital ratio': page 2, page 3    <- the text was right there
+```
+
+The passage does not contain "must", so the conjunction failed.
+
+**Options.** Keep conjunctive matching and report the result; strip question
+words with a stopword list of our own; or match disjunctively and rank.
+
+**Choice.** Build the tsquery as a disjunction of the query's own lexemes,
+taken from Postgres's tokenizer, and let `ts_rank_cd` discriminate.
+
+**Why.** Reporting the conjunctive result would have published "FTS recall@5 =
+0.00" as a finding about keyword retrieval when it was a bug in the query
+builder — a confidently wrong headline in exactly the comparison this project
+exists to make. Lexical retrieval is disjunctive and ranked; BM25 is too.
+Hand-rolling a stopword list would be guessing at which question words to drop.
+
+The cost is that explicit operators (quoted phrases, negation) are no longer
+honoured by this retriever. For natural-language questions that is far the
+smaller loss, and it is documented.
+
+**How it hid.** The in-memory store used by unit tests scored by term overlap —
+disjunctive — while Postgres was conjunctive. The fake and the real thing
+disagreed on semantics, so the unit tests passed throughout. Both are
+disjunctive now, and the docstring says to keep them agreeing: a fake that
+behaves differently from the system is not evidence about the system.
