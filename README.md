@@ -4,12 +4,12 @@ Question answering over public **RBI Master Directions**, returning answers with
 verifiable citations — circular number, page, and source URL — backed by a
 reproducible evaluation suite and an ablation study.
 
-> **Status: Phase 4 of 7 (evaluation).** The full path works and the
-> evaluation suite is built: retrieval metrics, generation metrics, an
-> LLM judge with calibration, and a 36-arm ablation. **There are no
-> results yet**, because results need a downloaded corpus and a
-> human-verified eval set. Every number in this README will come from a
-> script in this repository; none are written by hand.
+> **Status: Phase 5 of 7 (CI eval gate).** The full path works, the
+> evaluation suite is built, and CI blocks a merge when retrieval
+> regresses. **There are no quality results yet**, because those need a
+> downloaded corpus and a human-verified eval set. Every number in this
+> README will come from a script in this repository; none are written by
+> hand.
 
 **Live demo:** TODO (Phase 6)
 
@@ -221,6 +221,31 @@ gold set would be valid for one arm of the ablation and empty for the other
 five. Recall counts spans found rather than chunks retrieved, so large chunks
 do not score better merely by being fewer. See DECISIONS.md entries 0026-0027.
 
+## The CI gate
+
+Every push runs a retrieval regression check against a committed snapshot:
+
+```powershell
+uv run poe eval gate       # what CI runs
+uv run poe eval snapshot --baseline-only   # re-record after an intended change
+```
+
+**The gate is a canary, not a measurement.** It runs on a fixture corpus with
+fixture questions and answers one question: has retrieval changed since the
+baseline was recorded? Its numbers are not a statement about quality and must
+not be quoted as results.
+
+It gates `recall@1`, `recall@5` and `mrr`. Recall alone is not enough: with a
+snapshot smaller than k, every chunk is retrieved whatever the ranking, so
+recall@k is pinned at 1.0. Inverting the dense retriever left recall@5 at
+1.0000 while MRR fell to 0.25 — the order-sensitive metrics are what make the
+gate bite. See DECISIONS.md entry 0033.
+
+Query vectors are committed with the snapshot, so the job needs no model
+download. It runs against real Postgres rather than the in-memory store,
+because the two score keyword search differently and a gate measuring the fake
+would measure the wrong thing.
+
 ## Repository layout
 
 See [CLAUDE.md](CLAUDE.md) for the full map and the conventions this project
@@ -245,6 +270,9 @@ already:
   happens silently inside `sentence-transformers`. The Phase 4 ablation must
   report this next to any 1024-token result rather than presenting it as a
   clean chunk-size comparison.
+- **The CI gate does not measure quality.** It detects change on a fixture
+  corpus. It also cannot catch a regression inside the embedder, since it
+  replays committed query vectors; `poe test-model` covers that.
 - **There are no measured results.** The ablation runs, but it needs a real
   corpus and a verified eval set to produce anything worth reporting. The
   Results section stays empty until then.

@@ -837,3 +837,104 @@ disjunctive — while Postgres was conjunctive. The fake and the real thing
 disagreed on semantics, so the unit tests passed throughout. Both are
 disjunctive now, and the docstring says to keep them agreeing: a fake that
 behaves differently from the system is not evidence about the system.
+
+---
+
+## 0032 — The CI gate is a canary, not a quality measure
+
+**Date:** 2026-10-30 · **Phase:** 5
+
+**Context.** CI needs a cheap, deterministic retrieval check on every push. The
+real evaluation needs a downloaded corpus and a human-verified question set,
+neither of which belongs in a per-push job.
+
+**Options.** Gate on the real eval set (needs the corpus in CI, or rebuilt
+there); gate on a committed fixture snapshot; or skip the gate.
+
+**Choice.** A committed fixture snapshot under `eval/snapshot/`, with its own
+fixture questions, and vocabulary that keeps it separate from measurement.
+
+**Why.** The gate answers "did retrieval change since the baseline was
+recorded", which is worth blocking a merge over. It does not answer "is
+retrieval good", and its numbers must never appear in README or `results/`.
+The distinction is stated in the gate's own output, in the module docstring and
+in CLAUDE.md, because a recall figure pulled out of a CI log a year from now
+will otherwise get quoted as a project result.
+
+This also keeps rule 2 intact. The fixture questions are a tripwire over a
+fixture PDF, not claims about RBI, so they carry `verified_by_human=false` and
+the gate never filters on that flag. Nothing about this path can turn generated
+questions into reported ground truth.
+
+**Three sub-decisions.**
+
+*Committed query vectors.* `PrecomputedEmbedder` replays vectors stored
+alongside the chunk vectors, satisfying the Embedder protocol so the whole
+retrieval stack runs unchanged. CI needs no model download and no network, so
+the gate cannot flake on a HuggingFace rate limit — and a flaky gate gets
+ignored, which is worse than a narrow one. The cost is real: a regression
+inside `OnnxEmbedder` will not trip the gate. `poe test-model` covers that
+separately. The manifest records the model and dimension, and loading fails
+loudly when `Settings` has moved, because silently scoring an old model's
+vectors would make the gate worse than useless.
+
+*Real Postgres, not the in-memory store.* The fake would have been faster and
+needed no service container. It also scores keyword search by term overlap
+while Postgres uses `ts_rank_cd` — the exact divergence that let a completely
+broken FTS retriever pass the entire unit suite in Phase 4. A gate that
+measures the fake measures the wrong thing.
+
+*Snapshot size.* 33 KB for the fixture: `.npy` float32 rather than JSON, which
+would have been roughly five times larger. A realistic 200-chunk snapshot is
+about 300 KB.
+
+---
+
+## 0033 — The gate checks order-sensitive metrics, not recall@5 alone
+
+**Date:** 2026-10-30 · **Phase:** 5
+
+**Context.** The brief specifies that CI "fails if recall@5 drops more than a
+configurable threshold". Built exactly that way, the gate was then tested by
+inverting the dense retriever — ranking by *furthest* vector instead of
+nearest.
+
+**Measured.** The gate passed, exit code 0:
+
+```
+  ok   section_aware-512-dense-norerank recall@5: 1.0000 vs baseline 1.0000 (+0.0000)
+PASSED: nothing regressed.
+```
+
+The same broken retriever, measured across more metrics:
+
+| metric | broken | healthy |
+| --- | --- | --- |
+| recall@5 | **1.0000** | 1.0000 |
+| recall@1 | 0.0000 | 1.0000 |
+| MRR | 0.2500 | 1.0000 |
+| nDCG@5 | 0.4307 | 1.0000 |
+
+**Why it happened.** The fixture snapshot holds 4 chunks and k runs up to 10.
+When the corpus is smaller than k, every chunk is retrieved whatever the
+ranking, so recall@k is pinned at 1.0 and cannot move. Recall measures
+*whether* the evidence came back; it says nothing about *where* in the list.
+
+**Choice.** `EVAL_GATE_METRICS` defaults to `recall@1`, `recall@5`, `mrr`, and
+any of them dropping past the tolerance fails the build. The gate also prints a
+warning when the snapshot holds fewer chunks than the largest k, naming the
+limitation rather than leaving it to be discovered.
+
+**Why not just enlarge the corpus.** A bigger snapshot helps and should happen
+once real documents exist, but it does not fix the underlying point: recall@k
+is insensitive to ordering by construction, and a retriever can degrade badly
+while still returning the right chunk somewhere in the top k. The order-
+sensitive metrics are what make the gate bite.
+
+**Verified.** With the fix in place and the retriever inverted again, the gate
+fails with exit code 1 on `recall@1` and `mrr` for dense and hybrid, leaves FTS
+untouched (it does not use vectors), and `recall@5` still reads 1.0000 on every
+row — the brief's metric passing a broken retriever, visible in the output.
+
+This is a deliberate extension of the brief. Implemented literally, the gate
+would have been green for as long as the project lived.

@@ -29,7 +29,7 @@ Do not begin the next phase until asked.
 | 2 | Indexing and retrieval | done |
 | 3 | Generation API | done |
 | 4 | Evaluation | done |
-| 5 | CI eval gate | not started |
+| 5 | CI eval gate | done |
 | 6 | Frontend and AWS | not started |
 | 7 | Documentation | not started |
 
@@ -140,6 +140,8 @@ uv run poe eval status      # eval set summary
 uv run poe eval review      # verify candidates (only the owner may)
 uv run poe eval retrieval   # full 36-arm sweep, no LLM
 uv run poe eval             # retrieval, then generation on a subset
+uv run poe eval gate        # CI regression gate on the committed snapshot
+uv run poe eval snapshot    # rebuild that snapshot / re-record its baseline
 ```
 
 ## Measurement rules that bind later phases
@@ -166,6 +168,11 @@ uv run poe eval             # retrieval, then generation on a subset
 - Faithfulness is never reported without its judge calibration beside it.
 - The in-memory store and Postgres must agree on matching semantics. They
   once did not (OR vs AND) and unit tests passed on a broken retriever.
+- The CI gate measures change on a fixture corpus, never quality. Its
+  numbers do not belong in README or results/.
+- Never gate on recall@k alone. With a snapshot smaller than k it cannot
+  move: inverting the dense retriever left recall@5 at 1.0000 while MRR
+  fell to 0.25. Gate order-sensitive metrics too.
 
 ## Working with RBI's website
 
