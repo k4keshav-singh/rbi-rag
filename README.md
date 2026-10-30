@@ -4,14 +4,14 @@ Question answering over public **RBI Master Directions**, returning answers with
 verifiable citations — circular number, page, and source URL — backed by a
 reproducible evaluation suite and an ablation study.
 
-> **Status: Phase 5 of 7 (CI eval gate).** The full path works, the
-> evaluation suite is built, and CI blocks a merge when retrieval
-> regresses. **There are no quality results yet**, because those need a
-> downloaded corpus and a human-verified eval set. Every number in this
-> README will come from a script in this repository; none are written by
-> hand.
+> **Status: Phase 6 of 7 (frontend and AWS).** The full path works, the
+> evaluation suite is built, CI blocks a merge when retrieval regresses,
+> and there is a frontend plus Terraform for a free-tier deployment.
+> **There are no quality results yet**, because those need a downloaded
+> corpus and a human-verified eval set. Every number in this README will
+> come from a script in this repository; none are written by hand.
 
-**Live demo:** TODO (Phase 6)
+**Live demo:** TODO — deploy with `infra/` and put the URL here.
 
 ---
 
@@ -246,6 +246,35 @@ download. It runs against real Postgres rather than the in-memory store,
 because the two score keyword search differently and a gate measuring the fake
 would measure the wrong thing.
 
+## Frontend
+
+`uv run poe serve`, then open <http://127.0.0.1:8000/>. One self-contained
+HTML page: ask a question, read the answer, click a citation to open that page
+of the source PDF, and see latency and `cost_usd` underneath. Abstention
+renders as its own state rather than an empty answer.
+
+## Deployment
+
+```powershell
+docker build -t rbi-rag:local .
+```
+
+`infra/` holds Terraform for a free-tier AWS shape — EC2 running the
+container, RDS PostgreSQL with pgvector, S3 for the PDFs, least-privilege IAM
+and a cost budget with alerts. Estimated **$0–1/month** inside the 12-month
+free tier, about **$23/month** after. See [infra/README.md](infra/README.md)
+for the commands and a teardown guide that covers what `terraform destroy`
+leaves behind.
+
+The configuration is validated (`terraform validate`) but **has never been
+applied** — no AWS account was touched in writing it, and nothing in this
+repository runs `apply`, `destroy`, or any mutating AWS command.
+
+Reranking is **off** in the deployed image. Measured: the reranker needs
+1.32 GB of RAM against the API's 242 MB without it, which is the difference
+between a free-tier instance and a paid one. Phase 4's ablation has not yet
+shown it helps, so it stays off until it does.
+
 ## Repository layout
 
 See [CLAUDE.md](CLAUDE.md) for the full map and the conventions this project
@@ -270,6 +299,12 @@ already:
   happens silently inside `sentence-transformers`. The Phase 4 ablation must
   report this next to any 1024-token result rather than presenting it as a
   clean chunk-size comparison.
+- **The deployment has no TLS and no authentication.** The instance serves
+  HTTP behind a CIDR allowlist. Opening it to the world would expose an
+  endpoint that spends money per request.
+- **The Terraform has never been applied.** It validates, but validation is
+  not a deployment, and the first real `apply` will find things validation
+  cannot.
 - **The CI gate does not measure quality.** It detects change on a fixture
   corpus. It also cannot catch a regression inside the embedder, since it
   replays committed query vectors; `poe test-model` covers that.

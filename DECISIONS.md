@@ -938,3 +938,132 @@ row — the brief's metric passing a broken retriever, visible in the output.
 
 This is a deliberate extension of the brief. Implemented literally, the gate
 would have been green for as long as the project lived.
+
+---
+
+## 0034 — The reranker stays out of the image, and off by default
+
+**Date:** 2026-10-30 · **Phase:** 6
+
+**Context.** Instance sizing needed a real number, so the running process was
+measured rather than estimated:
+
+```
+baseline python              :    19.8 MB
++ project imports            :    55.0 MB
++ embedder loaded & warmed   :   241.7 MB   (+186.7)
++ reranker loaded & warmed   :  1562.5 MB   (+1320.8)
+
+BAAI/bge-small-en-v1.5         126.9 MB on disk
+BAAI/bge-reranker-base        1060.9 MB on disk
+```
+
+The reranker costs **1.32 GB of RAM and 1.06 GB of image**. I checked whether
+that was onnxruntime's memory arena rather than the model, and it is not — the
+exported file really is a gigabyte.
+
+**Options.** Bake both models in and size the host for 2 GiB; bake neither in
+and download at first use; or bake in the embedder and leave the reranker
+optional.
+
+**Choice.** The embedder is baked into the image; the reranker is not, and
+`RERANK_ENABLED` defaults to false.
+
+**Why.** The embedder is on every request path, so a cold start that reaches
+HuggingFace would be slow, rate-limitable, and fatal in a subnet with no
+egress — the image sets `HF_HUB_OFFLINE=1` so this is verified at build time
+rather than discovered in production.
+
+The reranker is the difference between a free-tier `t3.micro` and a `t3.small`
+at roughly $15/month. And the argument against paying is not really about
+money: **Phase 4's ablation has not run**, so nobody knows yet whether
+reranking improves anything on this corpus. Paying for an unmeasured component
+is the same error as reporting an unmeasured number. Turn it on when the
+ablation says it earns its place; `instance_type` and `enable_rerank` are both
+variables, so that is a one-line change.
+
+**Verified.** The image builds at 1.16 GB, runs, loads the embedder with no
+network, connects to Postgres and serves the frontend:
+
+```
+{"status": "degraded", "checks": {"api_key_configured": false,
+ "embedder_loaded": true, "llm_ready": false, "database": "ok"}}
+```
+
+---
+
+## 0035 — A single static page, not Streamlit
+
+**Date:** 2026-10-30 · **Phase:** 6
+
+**Context.** The brief offers "a single HTML page or Streamlit" for a frontend
+showing the answer, clickable citations, latency and cost.
+
+**Options.** Streamlit, or one static page served by the existing FastAPI app.
+
+**Choice.** One self-contained HTML file with vanilla JavaScript, served at
+`/`, with no build step and no CDN fetch.
+
+**Why.** Streamlit is a dependency outside the agreed stack, a second process
+and a second port, and it would double the deployment surface for a page with
+one input and one result. The static page costs nothing extra: it ships inside
+the package, is served by a route that already exists, and is testable through
+the same `TestClient` as everything else.
+
+Two details worth keeping. Citations deep-link as `url#page=N`, so a reader
+lands on the page of the PDF the quote came from rather than its first page.
+And abstention renders as a distinct state with its own styling, not as an
+empty answer — a system whose selling point is declining to guess should make
+declining look deliberate.
+
+A missing page returns a short message rather than a 500, so a packaging slip
+degrades the demo instead of looking like a total outage.
+
+---
+
+## 0036 — What the infrastructure deliberately leaves out
+
+**Date:** 2026-10-30 · **Phase:** 6
+
+**Context.** The brief asks for free-tier-eligible options where possible. The
+conventional AWS shapes for each component are not the cheap ones.
+
+**Choice and why, item by item.**
+
+*No NAT gateway* (~$32/month, more than everything else combined). The private
+subnets hold only the database, which has no reason to reach the internet.
+
+*No load balancer* (~$18/month). The instance serves port 80 directly behind a
+CIDR allowlist. This means no TLS, which is recorded as a limitation rather
+than hidden: widening `allowed_http_cidrs` to the world without adding TLS and
+authentication would expose an endpoint that spends money per request.
+
+*No Fargate* (~$26/month and no free tier). EC2 `t3.micro` is free for 750
+h/month in the first year and fits the measured 242 MB footprint.
+
+*SSM Parameter Store, not Secrets Manager* ($0 against $0.40 per secret per
+month) — functionally equivalent for two values read at boot.
+
+*No storage autoscaling on RDS.* `max_allocated_storage = 0`, because storage
+that grows on its own is a bill that grows on its own.
+
+*A cost budget with forecast alerts.* Two budgets per account are free.
+Thresholds at 50/80/100% of actual plus a forecast alert, so a runaway shows
+up on day three rather than day thirty. The SNS email subscription needs
+confirming by hand; until then no alert is delivered, which the deployment
+guide calls out as the silent failure it is.
+
+**IAM.** The instance role can read objects in its own bucket and its own two
+parameters, and decrypt only via `ssm.<region>.amazonaws.com`. No `rds:*` at
+all — the database is reached with a password over the network, so the role
+needs no database permission.
+
+**Teardown.** `terraform destroy` leaves billable things behind, so the guide
+walks through them: S3 object *versions* (versioning is on, so deleting
+objects is not enough), the RDS final snapshot that destroy *creates* on its
+way out, ECR images (~1.2 GB, not Terraform-managed), orphaned Elastic IPs,
+and CloudWatch log groups.
+
+**Validated, never applied.** `terraform fmt`, `terraform init -backend=false`
+and `terraform validate` all pass against AWS provider ~> 5.70. No AWS account
+was touched: no `apply`, no `destroy`, no mutating CLI call.

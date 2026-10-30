@@ -30,7 +30,7 @@ Do not begin the next phase until asked.
 | 3 | Generation API | done |
 | 4 | Evaluation | done |
 | 5 | CI eval gate | done |
-| 6 | Frontend and AWS | not started |
+| 6 | Frontend and AWS | done |
 | 7 | Documentation | not started |
 
 ## Hard rules
@@ -170,6 +170,8 @@ uv run poe eval snapshot    # rebuild that snapshot / re-record its baseline
   once did not (OR vs AND) and unit tests passed on a broken retriever.
 - The CI gate measures change on a fixture corpus, never quality. Its
   numbers do not belong in README or results/.
+- Reranking is off in deployment until the ablation shows it helps. It
+  costs 1.32 GB of RAM (measured) against the API's 242 MB without it.
 - Never gate on recall@k alone. With a snapshot smaller than k it cannot
   move: inverting the dense retriever left recall@5 at 1.0000 while MRR
   fell to 0.25. Gate order-sensitive metrics too.
