@@ -67,3 +67,21 @@ def test_unknown_retriever_is_rejected() -> None:
 def test_get_settings_is_cached() -> None:
     get_settings.cache_clear()
     assert get_settings() is get_settings()
+
+
+def test_a_blank_api_key_counts_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ANTHROPIC_API_KEY= would otherwise read as a configured key."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    assert make_settings().anthropic_api_key is None
+
+
+def test_a_whitespace_api_key_counts_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    assert make_settings().anthropic_api_key is None
+
+
+def test_a_real_api_key_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-example")
+    key = make_settings().anthropic_api_key
+    assert key is not None
+    assert key.get_secret_value() == "sk-ant-example"

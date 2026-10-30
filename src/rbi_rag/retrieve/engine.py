@@ -54,6 +54,7 @@ def retrieve(
         )
 
     by_id: dict[str, Chunk] = {hit.chunk.chunk_id: hit.chunk for hit in (*dense_hits, *fts_hits)}
+    dense_scores = {hit.chunk.chunk_id: hit.score for hit in dense_hits}
     dense_ranks = rank_positions([hit.chunk.chunk_id for hit in dense_hits])
     fts_ranks = rank_positions([hit.chunk.chunk_id for hit in fts_hits])
 
@@ -72,6 +73,7 @@ def retrieve(
                 dense_rank=dense_ranks.get(chunk_id),
                 fts_rank=fts_ranks.get(chunk_id),
                 rerank_score=rerank_score,
+                dense_score=dense_scores.get(chunk_id),
             )
         )
     return results

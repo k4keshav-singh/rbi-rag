@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rbi_rag.schemas import ChunkStrategy, RetrieverName
@@ -19,6 +19,7 @@ from rbi_rag.schemas import ChunkStrategy, RetrieverName
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 EmbeddingBackend = Literal["onnx", "sentence_transformers"]
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -44,6 +45,14 @@ class Settings(BaseSettings):
     # --- Anthropic ---
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5-5"
+    # Thinking tokens count against max_tokens, so this is not just answer length.
+    anthropic_max_tokens: int = Field(default=8192, ge=256)
+    # Untuned. Answering from supplied context is not agentic work, so the
+    # model default of "high" is probably more than this task needs; Phase 4
+    # should sweep it rather than this being left to taste.
+    anthropic_effort: Effort = "medium"
+    anthropic_timeout_seconds: float = Field(default=120.0, gt=0)
+    anthropic_max_retries: int = Field(default=2, ge=0)
 
     # --- Local models ---
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -89,7 +98,21 @@ class Settings(BaseSettings):
     rrf_k: int = Field(default=60, ge=1)
     rerank_enabled: bool = True
     rerank_candidates: int = Field(default=50, ge=1)
-    abstain_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+
+    # --- Abstention ---
+    # Two independent gates; see DECISIONS.md entry 0020.
+    #
+    # 1. A retrieval gate, compared against the reranker score when reranking
+    #    is on and the top dense cosine otherwise. NEVER against an RRF score:
+    #    those are ~0.03 for a good match and not comparable to either.
+    #    None disables it. It stays None until Phase 4 supplies labelled
+    #    unanswerable questions to tune it on -- a threshold invented now would
+    #    be a number nobody measured.
+    # 2. The model's own `sufficient_evidence` judgement, which always applies.
+    abstain_min_score: float | None = None
+    abstention_message: str = "Insufficient evidence in the provided circulars."
+    # Retries given to the model when it cites something it was not shown.
+    citation_retry_attempts: int = Field(default=1, ge=0, le=3)
 
     # HNSW is approximate. Evaluation uses exact search so that index recall
     # loss is never mistaken for a difference between retrievers.
@@ -97,6 +120,19 @@ class Settings(BaseSettings):
 
     # --- Logging ---
     log_level: LogLevel = "INFO"
+
+    @field_validator("anthropic_api_key", mode="after")
+    @classmethod
+    def _blank_key_is_no_key(cls, value: SecretStr | None) -> SecretStr | None:
+        """Treat ANTHROPIC_API_KEY= as absent, not as an empty key.
+
+        .env.example ships the name with no value, so without this the key
+        reads as configured and /health reports it as present. The failure then
+        surfaces as an authentication error on a user's first real query.
+        """
+        if value is None or not value.get_secret_value().strip():
+            return None
+        return value
 
     @property
     def postgres_dsn(self) -> str:

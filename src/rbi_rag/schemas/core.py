@@ -116,6 +116,13 @@ class RetrievedChunk(BaseModel):
     dense_rank: int | None = None
     fts_rank: int | None = None
     rerank_score: float | None = None
+    dense_score: float | None = Field(
+        default=None,
+        description=(
+            "Raw cosine similarity, kept even under hybrid. `score` is an RRF value "
+            "there and is not comparable across retrievers; this is."
+        ),
+    )
 
 
 class Citation(BaseModel):
@@ -154,3 +161,72 @@ class RetrievalConfig(BaseModel):
         default=False,
         description="Bypass the HNSW index for exact kNN. Evaluation sets this.",
     )
+
+
+class CitationClaim(BaseModel):
+    """A citation as the model asserts it, before anything has been checked.
+
+    Deliberately distinct from Citation: this is an unverified claim. It only
+    becomes a Citation after validate.py confirms the chunk was retrieved and
+    the quote actually appears in it.
+    """
+
+    chunk_id: str = Field(description="Id of a chunk from the supplied context.")
+    quote: str = Field(description="Verbatim span from that chunk supporting the claim.")
+
+
+class AnswerPayload(BaseModel):
+    """The structured output contract with the model."""
+
+    answer: str = Field(description="The answer, or an empty string when abstaining.")
+    citations: list[CitationClaim] = Field(default_factory=list)
+    sufficient_evidence: bool = Field(
+        description="False when the supplied circulars do not answer the question."
+    )
+
+
+class TokenUsage(BaseModel):
+    """Tokens consumed by one generation call."""
+
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+
+    @property
+    def total(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
+
+
+class QueryRequest(BaseModel):
+    """A question, plus any retrieval overrides for this one request."""
+
+    question: str = Field(min_length=1, max_length=2000)
+    retriever: RetrieverName | None = None
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    rerank: bool | None = None
+    chunk_set_id: int | None = Field(default=None, ge=1)
+
+
+class QueryResponse(BaseModel):
+    """What POST /query returns."""
+
+    answer: str
+    abstained: bool = Field(description="True when the system declined to answer.")
+    citations: list[Citation] = Field(default_factory=list)
+    retrieved_chunk_ids: list[str] = Field(default_factory=list)
+    latency_ms: float = Field(ge=0)
+    usage: TokenUsage = TokenUsage()
+    cost_usd: float | None = Field(
+        default=None,
+        description="None when the model has no entry in the price table, never a guess.",
+    )
+    model: str
+    retriever: RetrieverName
