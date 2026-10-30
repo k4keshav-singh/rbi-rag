@@ -7,6 +7,7 @@ no API key.
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -175,3 +176,43 @@ class TestQuery:
         with make_client() as client:
             response = client.post("/query", json={"question": "what capital ratio?"})
         assert response.headers["x-request-id"]
+
+
+class TestFrontend:
+    def test_the_page_is_served(self) -> None:
+        with make_client() as client:
+            response = client.get("/")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+
+    def test_it_renders_the_pieces_the_brief_asks_for(self) -> None:
+        """Answer, clickable citations, latency and cost."""
+        with make_client() as client:
+            page = client.get("/").text
+        for marker in ("citations", "latency_ms", "cost_usd", "abstained"):
+            assert marker in page, marker
+
+    def test_citations_deep_link_to_the_pdf_page(self) -> None:
+        with make_client() as client:
+            page = client.get("/").text
+        assert "#page=" in page
+
+    def test_it_pulls_in_nothing_from_a_cdn(self) -> None:
+        """One self-contained file: no build step, no third-party fetch."""
+        with make_client() as client:
+            page = client.get("/").text
+        assert "http://" not in page.replace("http://127.0.0.1", "")
+        assert "cdn" not in page.lower()
+
+    def test_a_missing_page_does_not_take_the_api_down(self, tmp_path: Path) -> None:
+        """A packaging slip must not look like a total outage."""
+        from rbi_rag.api import app as app_module
+
+        original = app_module.STATIC_DIR
+        app_module.STATIC_DIR = tmp_path / "absent"
+        try:
+            with make_client() as client:
+                assert client.get("/").status_code == 200
+                assert client.get("/health").status_code == 200
+        finally:
+            app_module.STATIC_DIR = original
